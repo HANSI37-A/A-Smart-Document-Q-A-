@@ -1,0 +1,16 @@
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Testing
+.pytest_cache/
+
+# Environment variables and secrets
+.env
+
+# Local vector database and generated data
+data/
