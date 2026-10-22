@@ -4,12 +4,12 @@ Tables become Markdown text (so they embed and read well). Figures (images and
 charts) are rendered to PNG; a vision model (rag/vision.py) then describes them
 in words, and that description is what gets indexed."""
 
-import io
 from dataclasses import dataclass
 from pathlib import Path
 
 import pdfplumber
 import pypdfium2
+from PIL import Image
 
 from rag.models import Chunk
 from rag.vision import DECORATIVE, VisionDescriber
@@ -32,7 +32,7 @@ class TableBlock:
 class Figure:
     page: int
     index: int
-    png: bytes
+    image: Image.Image   # the rendered page
 
 
 # ---------------- tables ----------------
@@ -92,12 +92,6 @@ def table_chunks(tables: list[TableBlock], doc_id: str, source: str) -> list[Chu
 
 # ---------------- figures ----------------
 
-def _to_png(image) -> bytes:
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return buf.getvalue()
-
-
 def _looks_like_chart(page) -> bool:
     if len(page.curves) >= CHART_MIN_CURVES:
         return True
@@ -106,26 +100,17 @@ def _looks_like_chart(page) -> bool:
 
 
 def extract_figures(path: Path, pdf: pdfplumber.PDF) -> list[Figure]:
-    """Embedded images are cropped out; pages drawn as charts are rendered whole."""
+    """Render every page that holds a photo or a chart. The whole page is rendered, not
+    just the picture, so the vision model also sees the slide title and captions."""
     doc = pypdfium2.PdfDocument(str(path))
     figures = []
     try:
         for page in pdf.pages:
-            candidates = [i for i in page.images
-                          if i["x1"] - i["x0"] >= MIN_IMAGE_SIZE
-                          and i["bottom"] - i["top"] >= MIN_IMAGE_SIZE]
-            chart = not page.images and _looks_like_chart(page)
-            if not candidates and not chart:
-                continue
-
-            rendered = doc[page.page_number - 1].render(scale=RENDER_SCALE).to_pil()
-            if chart:
-                figures.append(Figure(page.page_number, 0, _to_png(rendered)))
-            s = RENDER_SCALE
-            for index, img in enumerate(candidates):
-                box = (max(0, img["x0"] * s), max(0, img["top"] * s),
-                       min(rendered.width, img["x1"] * s), min(rendered.height, img["bottom"] * s))
-                figures.append(Figure(page.page_number, index, _to_png(rendered.crop(box))))
+            has_image = any(i["x1"] - i["x0"] >= MIN_IMAGE_SIZE
+                            and i["bottom"] - i["top"] >= MIN_IMAGE_SIZE for i in page.images)
+            if has_image or (not page.images and _looks_like_chart(page)):
+                image = doc[page.page_number - 1].render(scale=RENDER_SCALE).to_pil()
+                figures.append(Figure(page.page_number, 0, image))
     finally:
         doc.close()
     return figures
@@ -145,7 +130,7 @@ def figure_chunks(figures: list[Figure], describer: VisionDescriber, doc_id: str
         if id_ in known_ids:
             continue
         try:
-            description = describer.describe(f.png)
+            description = describer.describe(f.image)
         except Exception:
             continue
         if not description or description.upper().startswith(DECORATIVE):

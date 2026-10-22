@@ -30,9 +30,9 @@ class FakeDescriber:
         self.reply = reply
         self.calls = 0
 
-    def describe(self, png):
+    def describe(self, image):
         self.calls += 1
-        assert png.startswith(b"\x89PNG")   # really is a PNG
+        assert image.width > 100 and image.height > 100   # a real rendered page
         return self.reply
 
 
@@ -119,7 +119,7 @@ def test_extract_figures_finds_image_and_chart_only(rich_pdf):
     with pdfplumber.open(rich_pdf) as pdf:
         figures = extract_figures(rich_pdf, pdf)
     assert sorted(f.page for f in figures) == [3, 4]     # not the text or table pages
-    assert all(f.png.startswith(b"\x89PNG") for f in figures)
+    assert all(f.image.width > 100 for f in figures)
 
 
 def test_figure_chunks_use_the_describer(rich_pdf):
@@ -137,7 +137,7 @@ def test_decorative_empty_and_failing_figures_are_skipped(rich_pdf):
         figures = extract_figures(rich_pdf, pdf)
 
     class Failing:
-        def describe(self, png):
+        def describe(self, image):
             raise RuntimeError("quota exceeded")
 
     assert figure_chunks(figures, FakeDescriber("DECORATIVE"), "d", "r.pdf") == []
@@ -165,7 +165,7 @@ def test_openrouter_describer_sends_image_as_data_url():
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-    assert OpenRouterVisionDescriber(client).describe(b"\x89PNGdata") == "A line chart."
+    assert OpenRouterVisionDescriber(client).describe(Image.new("RGB", (4, 4))) == "A line chart."
     parts = sent["messages"][0]["content"]
     assert parts[0]["type"] == "image_url"
     assert parts[0]["image_url"]["url"].startswith("data:image/png;base64,")

@@ -1,7 +1,10 @@
 """Turn an image of a chart or figure into searchable text using a vision model."""
 
 import base64
+import io
 from typing import Protocol
+
+from PIL import Image
 
 from rag.openrouter import call_with_retry
 
@@ -19,7 +22,7 @@ DECORATIVE = "DECORATIVE"
 
 class VisionDescriber(Protocol):
     """Anything with this method works, which lets tests use a fake."""
-    def describe(self, png: bytes) -> str: ...
+    def describe(self, image: Image.Image) -> str: ...
 
 
 class OpenRouterVisionDescriber:
@@ -32,8 +35,10 @@ class OpenRouterVisionDescriber:
         self.max_tokens = max_tokens
         self.fallback_model = fallback_model
 
-    def describe(self, png: bytes) -> str:
-        data_url = "data:image/png;base64," + base64.standard_b64encode(png).decode()
+    def describe(self, image: Image.Image) -> str:
+        buf = io.BytesIO()
+        image.convert("RGB").save(buf, format="PNG")
+        data_url = "data:image/png;base64," + base64.standard_b64encode(buf.getvalue()).decode()
         response = call_with_retry(
             lambda model: self.client.chat.completions.create(
                 model=model,
