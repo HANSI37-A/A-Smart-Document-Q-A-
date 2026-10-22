@@ -54,7 +54,7 @@ with st.sidebar:
 
     st.divider()
     if app.generator is None:
-        st.warning("No ANTHROPIC_API_KEY set: search-only mode (shows passages, no answers).")
+        st.warning("No GEMINI_API_KEY set: search-only mode (shows passages, no answers).")
     else:
         st.caption(f"Model: {settings.model}")
 

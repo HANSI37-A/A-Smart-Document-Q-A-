@@ -1,21 +1,12 @@
-"""Tests for prompt building and the Claude call.
+"""Tests for prompt building and the Gemini call.
 
-The Claude test uses the real Anthropic SDK, but with a fake HTTP transport,
-so no API key or internet is needed and no money is spent. It still checks
-exactly what our code would send to the API."""
-import json
+The Gemini tests use a fake client, so no API key or internet is needed.
+They still check exactly what our code would send to the API."""
+from types import SimpleNamespace
 
-import anthropic
 import pytest
 
-# The guide says the SDK version it targets uses httpx2. Older SDKs use httpx.
-# Whichever your installed SDK uses, import it under the name `httpx2` here.
-try:
-    import httpx2
-except ImportError:  # pragma: no cover
-    import httpx as httpx2
-
-from rag.generator import SYSTEM_PROMPT, ClaudeGenerator, build_prompt, find_citations
+from rag.generator import SYSTEM_PROMPT, GeminiGenerator, build_prompt, find_citations
 from rag.models import Chunk, SearchResult
 
 
@@ -38,39 +29,38 @@ def test_find_citations_ignores_invalid_numbers():
     assert find_citations("No citations here.", n_sources=3) == []
 
 
-def mock_client(handler):
-    return anthropic.Anthropic(api_key="test-key", max_retries=0,
-                               http_client=httpx2.Client(transport=httpx2.MockTransport(handler)))
+class FakeClient:
+    """Mimics client.models.generate_content and records what was sent."""
+
+    def __init__(self, text=None, error=None):
+        self.sent = {}
+        self._text, self._error = text, error
+        self.models = SimpleNamespace(generate_content=self._generate)
+
+    def _generate(self, **kwargs):
+        self.sent = kwargs
+        if self._error:
+            raise self._error
+        return SimpleNamespace(text=self._text)
 
 
-def test_claude_generator_sends_correct_request():
-    sent = {}
-
-    def handler(request):
-        sent["path"] = request.url.path
-        sent["body"] = json.loads(request.content)
-        return httpx2.Response(200, json={
-            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-5-5",
-            "content": [{"type": "text", "text": "You get 14 days of annual leave [1]."}],
-            "stop_reason": "end_turn", "stop_sequence": None,
-            "usage": {"input_tokens": 120, "output_tokens": 12},
-        })
-
-    gen = ClaudeGenerator(mock_client(handler))
+def test_gemini_generator_sends_correct_request():
+    client = FakeClient("You get 14 days of annual leave [1].")
+    gen = GeminiGenerator(client)
     answer = gen.generate("How much leave?", [result("Leave is 14 days.")])
 
     assert answer == "You get 14 days of annual leave [1]."
-    assert sent["path"] == "/v1/messages"
-    assert sent["body"]["model"] == "claude-haiku-5-5"
-    assert sent["body"]["system"] == SYSTEM_PROMPT
-    assert "Leave is 14 days." in sent["body"]["messages"][0]["content"]
+    assert client.sent["model"] == "gemini-2.5-flash"
+    assert client.sent["config"].system_instruction == SYSTEM_PROMPT
+    assert client.sent["config"].max_output_tokens == 800
+    assert "Leave is 14 days." in client.sent["contents"]
 
 
-def test_invalid_api_key_raises_clear_error():
-    def handler(request):
-        return httpx2.Response(401, json={"type": "error", "error": {
-            "type": "authentication_error", "message": "invalid x-api-key"}})
+def test_empty_response_returns_empty_string():
+    assert GeminiGenerator(FakeClient(None)).generate("Q?", [result("text")]) == ""
 
-    gen = ClaudeGenerator(mock_client(handler))
-    with pytest.raises(anthropic.AuthenticationError):
+
+def test_api_errors_propagate():
+    gen = GeminiGenerator(FakeClient(error=RuntimeError("API key not valid")))
+    with pytest.raises(RuntimeError):
         gen.generate("Q?", [result("text")])

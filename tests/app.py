@@ -12,7 +12,7 @@ pytestmark = pytest.mark.slow  # loads the real embedding model
 @pytest.fixture
 def app_env(tmp_path, monkeypatch, sample_pdf):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))   # use a throwaway index
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")     # force search-only mode
+    monkeypatch.setenv("GEMINI_API_KEY", "")     # force search-only mode
     from rag.config import build_app
     build_app().ingest_pdf(sample_pdf)              # pre-load the sample document
 

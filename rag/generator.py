@@ -1,9 +1,10 @@
 
-"""Build the prompt from retrieved chunks and ask Claude."""
+"""Build the prompt from retrieved chunks and ask Gemini."""
 
 import re
 
-import anthropic
+from google import genai
+from google.genai import types
 
 from rag.models import SearchResult
 
@@ -49,11 +50,11 @@ def find_citations(answer: str, n_sources: int) -> list[int]:
     return sorted(n for n in numbers if 1 <= n <= n_sources)
 
 
-class ClaudeGenerator:
+class GeminiGenerator:
     def __init__(
         self,
-        client: anthropic.Anthropic,
-        model: str = "claude-haiku-5-5",
+        client: genai.Client,
+        model: str = "gemini-2.5-flash",
         max_tokens: int = 800,
     ):
         self.client = client
@@ -65,20 +66,13 @@ class ClaudeGenerator:
         question: str,
         results: list[SearchResult],
     ) -> str:
-        response = self.client.messages.create(
+        response = self.client.models.generate_content(
             model=self.model,
-            max_tokens=self.max_tokens,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": build_prompt(question, results),
-                }
-            ],
+            contents=build_prompt(question, results),
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=self.max_tokens,
+            ),
         )
 
-        return "".join(
-            block.text
-            for block in response.content
-            if block.type == "text"
-        )
+        return response.text or ""
