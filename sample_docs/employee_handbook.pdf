@@ -1,92 +1,169 @@
-"""Create sample_docs/employee_handbook.pdf: a 6-page handbook for a made-up company.
+%PDF-1.4
+%“Œ‹ž ReportLab Generated PDF document (opensource)
+1 0 obj
+<<
+/F1 2 0 R /F2 3 0 R
+>>
+endobj
+2 0 obj
+<<
+/BaseFont /Helvetica /Encoding /WinAnsiEncoding /Name /F1 /Subtype /Type1 /Type /Font
+>>
+endobj
+3 0 obj
+<<
+/BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Name /F2 /Subtype /Type1 /Type /Font
+>>
+endobj
+4 0 obj
+<<
+/Contents 13 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 12 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
 
-One topic per page, so you always know which page holds each answer:
-    page 1  Welcome            page 4  Probation and Performance
-    page 2  Leave Policy       page 5  IT Security
-    page 3  Remote Work        page 6  Expenses
+>> 
+  /Type /Page
+>>
+endobj
+5 0 obj
+<<
+/Contents 14 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 12 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
 
-Run from the project root:
-    python scripts/make_sample_pdf.py
-"""
-from pathlib import Path
+>> 
+  /Type /Page
+>>
+endobj
+6 0 obj
+<<
+/Contents 15 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 12 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
 
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import cm
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+>> 
+  /Type /Page
+>>
+endobj
+7 0 obj
+<<
+/Contents 16 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 12 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
 
-ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "sample_docs" / "employee_handbook.pdf"
+>> 
+  /Type /Page
+>>
+endobj
+8 0 obj
+<<
+/Contents 17 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 12 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
 
-PAGES = [
-    ("Welcome to Nimbus Software", [
-        "Nimbus Software Ltd. is a fictional software company used as an example in this "
-        "project. This handbook explains the policies that apply to all full-time employees.",
-        "Office hours are 9:00 am to 5:30 pm, Monday to Friday. Core collaboration hours, "
-        "when everyone should be available for meetings, are 10:00 am to 3:00 pm.",
-        "Questions about this handbook should be sent to the People Team at "
-        "people@nimbus.example.",
-    ]),
-    ("Leave Policy", [
-        "Full-time employees receive 14 days of paid annual leave per calendar year. Annual "
-        "leave must be requested in the HR portal at least 7 days in advance.",
-        "Employees also receive 7 days of paid sick leave per year. A medical certificate is "
-        "required for sick leave longer than 2 consecutive days.",
-        "Up to 5 days of unused annual leave can be carried over to the next year. Carried-over "
-        "days must be used before 31 March, after which they expire.",
-        "Parental leave is 84 working days for the primary caregiver and 10 working days for "
-        "the secondary caregiver.",
-    ]),
-    ("Remote Work", [
-        "Employees may work from home up to 2 days per week after completing probation. "
-        "Remote days must be agreed with your line manager in advance.",
-        "When working remotely, you must be reachable during the core collaboration hours and "
-        "must use the company VPN to access internal systems.",
-    ]),
-    ("Probation and Performance", [
-        "New employees serve a probation period of 6 months. During probation, you meet your "
-        "line manager every month to review your progress.",
-        "During probation, either side may end the employment with 1 week of written notice. "
-        "After probation, the notice period is 1 month.",
-        "Formal performance reviews take place twice a year, in June and December.",
-    ]),
-    ("IT Security", [
-        "Passwords must be at least 14 characters long. Multi-factor authentication is "
-        "required for all company accounts.",
-        "Laptops are replaced every 3 years. Lost or stolen devices must be reported to the "
-        "IT Helpdesk within 24 hours.",
-    ]),
-    ("Expenses", [
-        "Business expenses are reimbursed within 10 working days of submitting a claim. Claims "
-        "must be submitted in the expenses portal, with receipts, within 30 days of the purchase.",
-        "Meals during business travel are reimbursed up to 40 USD per day. Flights must be "
-        "booked in economy class. Any single purchase above 200 USD needs your line manager's "
-        "approval before you buy it.",
-    ]),
-]
+>> 
+  /Type /Page
+>>
+endobj
+9 0 obj
+<<
+/Contents 18 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 12 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
 
+>> 
+  /Type /Page
+>>
+endobj
+10 0 obj
+<<
+/PageMode /UseNone /Pages 12 0 R /Type /Catalog
+>>
+endobj
+11 0 obj
+<<
+/Author (\(anonymous\)) /CreationDate (D:20261022165805+05'00') /Creator (\(unspecified\)) /Keywords () /ModDate (D:20261022165805+05'00') /Producer (ReportLab PDF Library - \(opensource\)) 
+  /Subject (\(unspecified\)) /Title (Nimbus Software Employee Handbook) /Trapped /False
+>>
+endobj
+12 0 obj
+<<
+/Count 6 /Kids [ 4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R ] /Type /Pages
+>>
+endobj
+13 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 525
+>>
+stream
+Gat=f95iQ=&;9NK'm!%V<tT"JNcQ[Je>MqIKL!j6Bb`Aa.jC6Hs1Y.r3'`SB75"dNf_K-&"UYqTo@b&>9&b4G+A0]b@[4,>YOPV)pY"Md^o#7-W_0@s=Y96>>ZPN3G+YVO!lJku-(iAWFTlJu^+1?Z;SfY4jj&=[DOb-'L[WC8A&+)iiZep1!V-`k@oD)pqfc&`m8<Q4&(PiE&uu]O/cd,-UXdT]"pW\ac(P1ESSFm>Q8HJ%A)iLq4(/QQJca#FT?)9%:_p<;!If!3gr0-0eX9+?4k[8emPjp_CJm&5p'gDsC)!QJ7?I7i9)4S"kXM[=7:d<P]QOs0aA3%@Xk3TB_iLs!%AS.-&<OPB08fmB'%$Jq=hpL1^,arrbd\Tk92gj(DN7/$WnfohY="-M*db?9&GUg3a]V*sh5FQ-%!j%mWRd$R%5?"'g"W`u[70U8^._aLrl)Q14e."A^E5H]p].>M(_<`22XM5?Y`/r=Fmg]ie9K)G5k/O<ce"fV4BM@MGeBkCp'25%pl,~>endstream
+endobj
+14 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 571
+>>
+stream
+Gat=g5u6Mp&;BTK(%95HQ;XVp;N;-Zg&ikA.f0;PB@7\<411VGrr'u2M7TVuW#&fQr8)hmCk4V/&Aoq9i24HC>!Sl3CPZemTtJEORI$*A8"dq9X#q19MJP#:Vi)P#8TmZVcJ^\'9mMhYB83_.eN/Cd7DUg?EYnIDHcC]g9(q.=5,8#s4W]g-P<S7(jE%UM^Fh\j,Sf>b!^[</q(Tq%e+thuL;?TbD9qS-=L-X:7#$SF%pPeT<Ip+n84*p*\*P5/Z`2$>B6#g+4K?.p>r8)_G[`YhFmK33:^1@Oq"4loFb)@t`&g/U)#]["<I6KaB:gh)?S9Z9^RL$NHTPXPs&47j?]LKaW+`\=Ou+GrTP>c%0N?i`Y#C@]M8-Le=@-5u@>D'5K+u`Pca!r+2O])K="MYYrS&Mu/18*UFIk_8.`oW9,WVd4K&+IUm1>ZD[rB-t*QseS4HU,Zmr8l\:L%,E=:"gO-au<*F^U!VXchEefn80cjh;B!Z4Q2.5EK@ghq:Q!4B<>+Xa<oW1[ZH!'FA!A)KL8%kDbA_A1EE2amP#?ZaB6=*8UJtK]F4'\iLE~>endstream
+endobj
+15 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 416
+>>
+stream
+Gat=d_/=ii&;KX9`ID]n#$F@DX,3F:VDb6A<u?M2mc*S2_qR,.b+Z(Sd`Ym-k+D)]JHuk+:icfA1/'S-,"?a+8AYM_$eAI"$8++9o/'^JWCS^=VI:07;rfDf"hkk*b@$T@j*XR_.82WS`52c!Z&a6V-Y49+BDD7XlkA'95Ht[+GL+4Nn]]g?F?0Ab,8M(,!?hZRF9#IE[P9q-Kp"UEL6"<u;5fEtF=j"KN'd4R/MYO=8'$<-7W)2[OK3M\QH`aIg?A%gEq:4c<G*?G"BdKWJTL3.oVQ+T[3d<$AP%ha6Pa$,k;9(6rfM:\qlfLl,!C0sEZQp(rn.C5TM.,EjLucO*W%Qm&TYe'1l^90*c+]AN\.%Z7dV@mZZP#"XjfKthHp."AY,*nW3ml$Z@VDF,@uAY,5;A;F0nR~>endstream
+endobj
+16 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 452
+>>
+stream
+Gat=fhbM$B(rbt<'^$*gR<4I_QP/Ds(aI./TSt\*cka71ZF;dKp_UnW]P3i,jF"^`q?cfALM5"#"/?jF@f_]70-Sb'7K/2-4Sk!tNPI6+n$>]`(oDLs5Ins6kiaf0O+"N`1s1#ciCoALgl<&(qd>d:_63P#lr8:B%A]ENSZ]=p92k<eq$6KV0Q7Y!c43Pi%R\PLZA7C-W^Lr2!^a7SZPMkd25o+WgQ3."\h,)15/=>cPb#XVaIo[*M^l`q`[N].MJgen%5d=e`U*d#<lttW)EF\t[rb>W!H6r,<NKDQ0Ub((<ID?7CbYX&d\##gIR/`]blVJZRMl$T]08'28$2[j!]@Ls*Rmi0:BP+?.N%3NoK;8!Ymr[_B]#J_+M.>tM0\[P^Vq1_9fW\f[0f:qqmEK9JsT,>]oiQXlTcfE:q@SoK9qR+]9lAFW2Fap+VB,'"Jt&>~>endstream
+endobj
+17 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 390
+>>
+stream
+Gat=d5u5?_'SPrR'lubV9=L,e<t^?8Qq6!sY\kP)[I'9hYE8a1;c#Si6K2Q/D_a-+;b3!8S^l<,;Id@;:au#H.Z6+H%3BY6Lb9a&=WYo\>\0:6P;l,]3G]]VU>_JipX)lg`=88%f,1\hW;.!lVF0-PXmo#l@jh3qoK2^D:pH"gJ(CERCX&K+Hni7D,?:'R$;-l2o(.qZ'>hk4&Q![;n4#*`MG+S[%(8!/X:PV9^=gPOmOE2e4(H5c9ID,DiiEaT)n5mF6g'gDlo]c=ND*?gqRSOY%qDa1)@>qNl?kYk0@\"KinFIN"K&U_Q3u!$\An_8)%JAZ4pX7qLp*aC5t>SPk6jtcB;#Cd+XLR!Y<5T[[0;6pS=GhH6(4M>*WKS8oEf/cT61~>endstream
+endobj
+18 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 465
+>>
+stream
+GasJLb>.(O'Sc@-MLWZ8.)\]AdcD2,$5R;1&)\_2WJB+95'A)fO5,t#6C#-eAc)8;Hib0@M#H%B?rc69/Kf)`)i-7$;8;&":-Ohd7UT)i%ojoJ/BT0]ntJIOPE-tQAoN1(WXj,i/Q$<=YB,MT.%'0pmeZ`p,f@PZW;iX,NV[S8gKBSbH1X'X:b<J"6f_]O+X"_;<jb`.$EOXjK+;lD*Pmld9lNcH5*b"T"-MQk\p%_3FE1jC%6-1JGos48g-I3Zi\>>k9%Q,.7mfM9e3OuI/Y1Zdlb"5*p,6m>Or?L07qGM-8%88/%'JDYVXuXMW`WRq;Cp*;GpPI)]&7&(k(f"AE_"#c3am]N-o:euqh1):N149>W.+%ML\aL\NOA42")=sCHA^@B;uA?`=IFUtFbFStNf[n[[NXoQP78"S1'B1gm)`P(=Nb]+FsdMO['>YN/=J7Yq;8]DHir)#e#N~>endstream
+endobj
+xref
+0 19
+0000000000 65535 f 
+0000000061 00000 n 
+0000000102 00000 n 
+0000000209 00000 n 
+0000000321 00000 n 
+0000000526 00000 n 
+0000000731 00000 n 
+0000000936 00000 n 
+0000001141 00000 n 
+0000001346 00000 n 
+0000001551 00000 n 
+0000001621 00000 n 
+0000001922 00000 n 
+0000002012 00000 n 
+0000002628 00000 n 
+0000003290 00000 n 
+0000003797 00000 n 
+0000004340 00000 n 
+0000004821 00000 n 
+trailer
+<<
+/ID 
+[<493cc8a99edbedc5fb52b114d691f3b7><493cc8a99edbedc5fb52b114d691f3b7>]
+% ReportLab generated PDF document -- digest (opensource)
 
-def build(output: Path = OUTPUT) -> Path:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    styles = getSampleStyleSheet()
-    body = ParagraphStyle("Body", parent=styles["Normal"], fontSize=11, leading=16, spaceAfter=10)
-
-    doc = SimpleDocTemplate(
-        str(output), pagesize=A4, title="Nimbus Software Employee Handbook",
-        leftMargin=2.5 * cm, rightMargin=2.5 * cm, topMargin=2.5 * cm, bottomMargin=2.5 * cm,
-    )
-    story = []
-    for i, (title, paragraphs) in enumerate(PAGES):
-        story.append(Paragraph(title, styles["Heading1"]))
-        story.append(Spacer(1, 8))
-        for text in paragraphs:
-            story.append(Paragraph(text, body))
-        if i < len(PAGES) - 1:
-            story.append(PageBreak())  # one topic per page, so page numbers are predictable
-    doc.build(story)
-    return output
-
-
-if __name__ == "__main__":
-    path = build()
-    print(f"Created {path.relative_to(ROOT)} with {len(PAGES)} pages")
+/Info 11 0 R
+/Root 10 0 R
+/Size 19
+>>
+startxref
+5377
+%%EOF

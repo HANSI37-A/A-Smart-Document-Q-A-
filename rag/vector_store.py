@@ -51,3 +51,8 @@ class VectorStore:
 
     def count(self) -> int:
         return self._col.count()
+
+    def close(self) -> None:
+        """Release Chroma's SQLite file handles (Windows can't delete a locked directory)."""
+        self._client.close()
+        self._client.clear_system_cache()  # drop the cached client that keeps the DB open

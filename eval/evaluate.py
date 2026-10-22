@@ -24,22 +24,27 @@ from rag.vector_store import VectorStore  # noqa: E402
 
 def evaluate(pdf: Path, questions: list[dict], chunk_size: int, overlap: int, k: int,
              embedder=None, verbose: bool = True) -> dict:
-    with tempfile.TemporaryDirectory() as tmp:  # fresh index, never touches your real data
-        qa = DocQA(VectorStore(tmp), embedder or FastEmbedder(), generator=None,
-                   top_k=k, min_score=0.0, chunk_size=chunk_size, overlap=overlap)
-        qa.ingest_pdf(pdf)
+    # fresh index, never touches your real data; ignore_cleanup_errors as a Windows safety net
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        store = VectorStore(tmp)
+        try:
+            qa = DocQA(store, embedder or FastEmbedder(), generator=None,
+                       top_k=k, min_score=0.0, chunk_size=chunk_size, overlap=overlap)
+            qa.ingest_pdf(pdf)
 
-        hits1 = hitsk = 0
-        rr_total = 0.0
-        for q in questions:
-            pages = [r.chunk.page for r in qa.retrieve(q["question"])]
-            rank = pages.index(q["page"]) + 1 if q["page"] in pages else None
-            hits1 += rank == 1
-            hitsk += rank is not None
-            rr_total += 1 / rank if rank else 0
-            if verbose:
-                mark = "OK  " if rank == 1 else ("~   " if rank else "MISS")
-                print(f"{mark} rank={rank} pages={pages} {q['question']}")
+            hits1 = hitsk = 0
+            rr_total = 0.0
+            for q in questions:
+                pages = [r.chunk.page for r in qa.retrieve(q["question"])]
+                rank = pages.index(q["page"]) + 1 if q["page"] in pages else None
+                hits1 += rank == 1
+                hitsk += rank is not None
+                rr_total += 1 / rank if rank else 0
+                if verbose:
+                    mark = "OK  " if rank == 1 else ("~   " if rank else "MISS")
+                    print(f"{mark} rank={rank} pages={pages} {q['question']}")
+        finally:
+            store.close()  # release chroma.sqlite3 before the directory is deleted
 
     n = len(questions)
     return {"hit@1": hits1 / n, f"hit@{k}": hitsk / n, "mrr": rr_total / n, "n": n}
