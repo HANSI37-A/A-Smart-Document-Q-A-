@@ -54,7 +54,7 @@ class GeminiGenerator:
     def __init__(
         self,
         client: genai.Client,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3.8-flash",
         max_tokens: int = 800,
     ):
         self.client = client

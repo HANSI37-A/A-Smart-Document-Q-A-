@@ -22,7 +22,7 @@ def load_settings() -> Settings:
     load_dotenv(PROJECT_DIR / ".env")
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
-        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         data_dir=Path(os.getenv("DATA_DIR", PROJECT_DIR / "data")),
         top_k=int(os.getenv("TOP_K", "5")),
         min_score=float(os.getenv("MIN_SCORE", "0.5")),

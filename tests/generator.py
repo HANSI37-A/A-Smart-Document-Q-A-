@@ -50,7 +50,7 @@ def test_gemini_generator_sends_correct_request():
     answer = gen.generate("How much leave?", [result("Leave is 14 days.")])
 
     assert answer == "You get 14 days of annual leave [1]."
-    assert client.sent["model"] == "gemini-2.5-flash"
+    assert client.sent["model"] == "gemini-3.8-flash"
     assert client.sent["config"].system_instruction == SYSTEM_PROMPT
     assert client.sent["config"].max_output_tokens == 800
     assert "Leave is 14 days." in client.sent["contents"]
