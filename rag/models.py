@@ -18,6 +18,7 @@ class Chunk:
     source: str
     page: int
     doc_id: str
+    kind: str = "text"   # "text", "table" or "figure"
 
 
 @dataclass

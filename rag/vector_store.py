@@ -22,7 +22,7 @@ class VectorStore:
             ids=[c.id for c in chunks],
             embeddings=embeddings,
             documents=[c.text for c in chunks],
-            metadatas=[{"source": c.source, "page": c.page, "doc_id": c.doc_id}
+            metadatas=[{"source": c.source, "page": c.page, "doc_id": c.doc_id, "kind": c.kind}
                        for c in chunks],
         )
 
@@ -38,7 +38,8 @@ class VectorStore:
         for id_, text, meta, dist in zip(res["ids"][0], res["documents"][0],
                                          res["metadatas"][0], res["distances"][0]):
             chunk = Chunk(id=id_, text=text, source=meta["source"],
-                          page=meta["page"], doc_id=meta["doc_id"])
+                          page=meta["page"], doc_id=meta["doc_id"],
+                          kind=meta.get("kind", "text"))
             results.append(SearchResult(chunk=chunk, score=round(1 - dist, 4)))
         return results
 
@@ -48,6 +49,12 @@ class VectorStore:
 
     def delete_document(self, doc_id: str) -> None:
         self._col.delete(where={"doc_id": doc_id})
+
+    def existing_ids(self, ids: list[str]) -> set[str]:
+        """Which of these chunk ids are already indexed (used to skip paid vision calls)."""
+        if not ids:
+            return set()
+        return set(self._col.get(ids=ids, include=[])["ids"])
 
     def count(self) -> int:
         return self._col.count()

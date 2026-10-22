@@ -34,7 +34,9 @@ with st.sidebar:
                     tmp.write(up.getbuffer())
                 try:
                     r = app.ingest_pdf(tmp.name, source_name=up.name)
-                    st.success(f"{r.source}: {r.pages} pages, {r.chunks} chunks")
+                    extra = f", {r.tables} tables" if r.tables else ""
+                    extra += f", {r.figures} figures" if r.figures else ""
+                    st.success(f"{r.source}: {r.pages} pages, {r.chunks} chunks{extra}")
                 except NoTextError as e:
                     st.error(str(e))
                 finally:
@@ -57,6 +59,8 @@ with st.sidebar:
         st.warning("No GEMINI_API_KEY set: search-only mode (shows passages, no answers).")
     else:
         st.caption(f"Model: {settings.model}")
+        st.caption("Charts and images: " + ("read by a vision model" if app.describer
+                                              else "not indexed (VISION_PROVIDER=none)"))
 
 # ---------------- main area: chat ----------------
 st.title(":material/description: Ask your documents")
@@ -71,7 +75,9 @@ def show_sources(sources, cited):
     with st.expander(f"Sources ({len(sources)})"):
         for n, s in enumerate(sources, start=1):
             star = " · :material/star: cited" if n in cited else ""
-            st.markdown(f"**[{n}] {s['source']}, page {s['page']}** · score {s['score']:.2f}{star}")
+            kind = f" · {s['kind']}" if s.get("kind", "text") != "text" else ""
+            st.markdown(f"**[{n}] {s['source']}, page {s['page']}**{kind} · "
+                        f"score {s['score']:.2f}{star}")
             st.caption(s["text"])
 
 
@@ -91,7 +97,8 @@ if question := st.chat_input("Ask a question about your documents"):
             try:
                 answer = app.ask(question)
                 sources = [{"source": r.chunk.source, "page": r.chunk.page, "score": r.score,
-                            "text": r.chunk.text} for r in answer.sources]
+                            "text": r.chunk.text, "kind": r.chunk.kind}
+                           for r in answer.sources]
                 text, cited = answer.text, answer.cited
             except Exception as e:  # e.g. invalid API key or no internet
                 text, sources, cited = f":material/error: Something went wrong: {e}", [], []

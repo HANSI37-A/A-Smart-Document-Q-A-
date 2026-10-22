@@ -6,18 +6,21 @@ import re
 from google import genai
 from google.genai import types
 
+from rag.gemini_retry import call_with_retry
 from rag.models import SearchResult
 
 
 SYSTEM_PROMPT = """
 You are a helpful document question-answering assistant.
 
-Answer the user's question using only the provided document sources.
-If the sources do not contain enough information, clearly say that you
-could not find the answer in the provided documents.
+Answer the user's question concisely, using only the provided document sources.
+If the sources do not contain the answer, reply exactly:
+I couldn't find that in the documents.
 
-Include citations for factual claims using the source number format,
-such as [1] or [2].
+Sources may be plain text, Markdown tables (type="table") or written descriptions
+of charts and images (type="figure"); use all of them.
+
+Cite every factual claim with its source number, such as [1] or [2].
 Do not invent information or citations.
 """
 
@@ -26,9 +29,10 @@ def build_prompt(question: str, results: list[SearchResult]) -> str:
     blocks = []
 
     for n, result in enumerate(results, start=1):
+        kind = "" if result.chunk.kind == "text" else f' type="{result.chunk.kind}"'
         blocks.append(
             f'<source id="{n}" file="{result.chunk.source}" '
-            f'page="{result.chunk.page}">\n'
+            f'page="{result.chunk.page}"{kind}>\n'
             f"{result.chunk.text}\n"
             f"</source>"
         )
@@ -55,24 +59,31 @@ class GeminiGenerator:
         self,
         client: genai.Client,
         model: str = "gemini-3.8-flash",
-        max_tokens: int = 800,
+        max_tokens: int = 2048,  # Gemini's hidden "thinking" tokens count toward this limit
+        fallback_model: str | None = None,
     ):
         self.client = client
         self.model = model
         self.max_tokens = max_tokens
+        self.fallback_model = fallback_model
 
     def generate(
         self,
         question: str,
         results: list[SearchResult],
     ) -> str:
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=build_prompt(question, results),
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=self.max_tokens,
+        prompt = build_prompt(question, results)
+        response = call_with_retry(
+            lambda model: self.client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    max_output_tokens=self.max_tokens,
+                ),
             ),
+            [m for m in (self.model, self.fallback_model) if m],
         )
 
-        return response.text or ""
+        # text is None when the reply was blocked or cut off before any answer was written
+        return response.text or "I couldn't find that in the documents."
