@@ -56,7 +56,7 @@ with st.sidebar:
 
     st.divider()
     if app.generator is None:
-        st.warning("No GEMINI_API_KEY set: search-only mode (shows passages, no answers).")
+        st.warning("No OPENROUTER_API_KEY set: search-only mode (shows passages, no answers).")
     else:
         st.caption(f"Model: {settings.model}")
         st.caption("Charts and images: " + ("read by a vision model" if app.describer

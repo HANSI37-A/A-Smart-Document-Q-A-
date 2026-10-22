@@ -3,9 +3,7 @@
 import base64
 from typing import Protocol
 
-from google.genai import types
-
-from rag.gemini_retry import call_with_retry
+from rag.openrouter import call_with_retry
 
 PROMPT = (
     "This image comes from a page of a PDF document. Describe it so that someone who "
@@ -24,8 +22,10 @@ class VisionDescriber(Protocol):
     def describe(self, png: bytes) -> str: ...
 
 
-class GeminiVisionDescriber:
-    def __init__(self, client, model: str = "gemini-3.8-flash", max_tokens: int = 2048,
+class OpenRouterVisionDescriber:
+    """Any vision-capable model on OpenRouter (GPT-4o, Claude, ...)."""
+
+    def __init__(self, client, model: str = "openai/gpt-4o-mini", max_tokens: int = 2048,
                  fallback_model: str | None = None):
         self.client = client
         self.model = model
@@ -33,37 +33,19 @@ class GeminiVisionDescriber:
         self.fallback_model = fallback_model
 
     def describe(self, png: bytes) -> str:
+        data_url = "data:image/png;base64," + base64.standard_b64encode(png).decode()
         response = call_with_retry(
-            lambda model: self.client.models.generate_content(
+            lambda model: self.client.chat.completions.create(
                 model=model,
-                contents=[types.Part.from_bytes(data=png, mime_type="image/png"), PROMPT],
-                config=types.GenerateContentConfig(max_output_tokens=self.max_tokens),
+                max_tokens=self.max_tokens,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": PROMPT},
+                    ],
+                }],
             ),
             [m for m in (self.model, self.fallback_model) if m],
         )
-        return (response.text or "").strip()
-
-
-class ClaudeVisionDescriber:
-    """Same job with Claude. Needs `pip install anthropic`; pass an anthropic.Anthropic."""
-
-    def __init__(self, client, model: str = "claude-haiku-5-5", max_tokens: int = 800):
-        self.client = client
-        self.model = model
-        self.max_tokens = max_tokens
-
-    def describe(self, png: bytes) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": "image/png",
-                        "data": base64.standard_b64encode(png).decode()}},
-                    {"type": "text", "text": PROMPT},
-                ],
-            }],
-        )
-        return "".join(b.text for b in response.content if b.type == "text").strip()
+        return (response.choices[0].message.content or "").strip()

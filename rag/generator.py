@@ -1,13 +1,12 @@
 
-"""Build the prompt from retrieved chunks and ask Gemini."""
+"""Build the prompt from retrieved chunks and ask the model (through OpenRouter)."""
 
 import re
 
-from google import genai
-from google.genai import types
+import openai
 
-from rag.gemini_retry import call_with_retry
 from rag.models import SearchResult
+from rag.openrouter import call_with_retry
 
 
 SYSTEM_PROMPT = """
@@ -54,12 +53,12 @@ def find_citations(answer: str, n_sources: int) -> list[int]:
     return sorted(n for n in numbers if 1 <= n <= n_sources)
 
 
-class GeminiGenerator:
+class OpenRouterGenerator:
     def __init__(
         self,
-        client: genai.Client,
-        model: str = "gemini-3.8-flash",
-        max_tokens: int = 2048,  # Gemini's hidden "thinking" tokens count toward this limit
+        client: openai.OpenAI,
+        model: str = "openai/gpt-4o-mini",
+        max_tokens: int = 2048,
         fallback_model: str | None = None,
     ):
         self.client = client
@@ -74,16 +73,15 @@ class GeminiGenerator:
     ) -> str:
         prompt = build_prompt(question, results)
         response = call_with_retry(
-            lambda model: self.client.models.generate_content(
+            lambda model: self.client.chat.completions.create(
                 model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    max_output_tokens=self.max_tokens,
-                ),
+                max_tokens=self.max_tokens,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
             ),
             [m for m in (self.model, self.fallback_model) if m],
         )
-
-        # text is None when the reply was blocked or cut off before any answer was written
-        return response.text or "I couldn't find that in the documents."
+        # content is None when the reply was blocked or cut off before any answer was written
+        return response.choices[0].message.content or "I couldn't find that in the documents."

@@ -19,7 +19,7 @@ from rag.multimodal import (
 )
 from rag.pipeline import DocQA
 from rag.vector_store import VectorStore
-from rag.vision import ClaudeVisionDescriber, GeminiVisionDescriber
+from rag.vision import OpenRouterVisionDescriber
 from tests.conftest import FakeGenerator
 
 REVENUE = [["Region", "Revenue", "Growth"], ["North", "120", "5%"], ["South", "80", "-2%"]]
@@ -153,35 +153,23 @@ def test_known_figures_are_not_described_again(rich_pdf):
     assert describer.calls == 0
 
 
-# ---------------- vision describers (real classes, fake clients) ----------------
+# ---------------- vision describer (real class, fake client) ----------------
 
-def test_gemini_describer_sends_image_and_prompt():
-    from types import SimpleNamespace
-    sent = {}
-
-    def generate_content(**kwargs):
-        sent.update(kwargs)
-        return SimpleNamespace(text="  A line chart.  ")
-
-    client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
-    assert GeminiVisionDescriber(client).describe(b"\x89PNGdata") == "A line chart."
-    image_part = sent["contents"][0]
-    assert image_part.inline_data.mime_type == "image/png"
-    assert image_part.inline_data.data == b"\x89PNGdata"
-
-
-def test_claude_describer_sends_base64_image():
+def test_openrouter_describer_sends_image_as_data_url():
     from types import SimpleNamespace
     sent = {}
 
     def create(**kwargs):
         sent.update(kwargs)
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text="A pie chart.")])
+        message = SimpleNamespace(content="  A line chart.  ")
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
-    client = SimpleNamespace(messages=SimpleNamespace(create=create))
-    assert ClaudeVisionDescriber(client).describe(b"\x89PNGdata") == "A pie chart."
-    image_block = sent["messages"][0]["content"][0]
-    assert image_block["source"]["media_type"] == "image/png"
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    assert OpenRouterVisionDescriber(client).describe(b"\x89PNGdata") == "A line chart."
+    parts = sent["messages"][0]["content"]
+    assert parts[0]["type"] == "image_url"
+    assert parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert parts[1]["type"] == "text"
 
 
 # ---------------- pipeline ----------------
