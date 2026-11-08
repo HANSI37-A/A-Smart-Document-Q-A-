@@ -29,10 +29,12 @@ class FakeDescriber:
     def __init__(self, reply="Bar chart of quarterly sales, rising from Q1 to Q4."):
         self.reply = reply
         self.calls = 0
+        self.contexts = []
 
-    def describe(self, image):
+    def describe(self, image, context=""):
         self.calls += 1
-        assert image.width > 100 and image.height > 100   # a real rendered page
+        self.contexts.append(context)
+        assert image.width > 100 and image.height > 100   # a real cropped figure
         return self.reply
 
 
@@ -137,7 +139,7 @@ def test_decorative_empty_and_failing_figures_are_skipped(rich_pdf):
         figures = extract_figures(rich_pdf, pdf)
 
     class Failing:
-        def describe(self, image):
+        def describe(self, image, context=""):
             raise RuntimeError("quota exceeded")
 
     assert figure_chunks(figures, FakeDescriber("DECORATIVE"), "d", "r.pdf") == []
@@ -235,3 +237,205 @@ def test_prompt_labels_tables_and_figures():
     ])
     assert '<source id="1" file="h.pdf" page="1">' in text      # plain text unchanged
     assert '<source id="2" file="h.pdf" page="2" type="table">' in text
+
+
+# ---------------- SAM-style cropping, decorative filter, saved images ----------------
+
+from rag.multimodal import (  # noqa: E402
+    Figure, average_hash, is_probably_decorative, page_hint_boxes, save_figure,
+)
+from rag.segmenter import Box  # noqa: E402
+
+
+class FixedSegmenter:
+    """Pretends to be SAM and returns the boxes it was told to."""
+    def __init__(self, boxes):
+        self.boxes, self.seen = boxes, []
+
+    def segment(self, image, hints):
+        self.seen.append((image.size, hints))
+        return self.boxes
+
+
+def test_hint_boxes_cover_the_image_and_the_chart(rich_pdf):
+    with pdfplumber.open(rich_pdf) as pdf:
+        assert page_hint_boxes(pdf.pages[0]) == []          # text page: no figure
+        assert page_hint_boxes(pdf.pages[1]) == []          # table page: no figure
+        image_hint, = page_hint_boxes(pdf.pages[2])
+        chart_hint, = page_hint_boxes(pdf.pages[3])
+    assert image_hint.width == pytest.approx(300 * 2, abs=2)    # 300 pt image at 2x
+    assert chart_hint.width > 200 and chart_hint.height > 200
+
+
+def test_figures_are_cropped_to_what_the_segmenter_returns(rich_pdf):
+    seg = FixedSegmenter([Box(200, 300, 700, 700)])
+    with pdfplumber.open(rich_pdf) as pdf:
+        figures = extract_figures(rich_pdf, pdf, seg)
+    assert sorted(f.page for f in figures) == [3, 4]
+    assert all(hints for _, hints in seg.seen)               # SAM got the pdfplumber hints
+    for f in figures:
+        assert 500 < f.image.width < 560 and 400 < f.image.height < 460   # box + margin
+        assert f.page_size[0] > f.image.width
+    assert "Photo page" in figures[0].page_text
+
+
+def test_a_crashing_segmenter_falls_back_to_the_hint_crop(rich_pdf):
+    class Crashing:
+        def segment(self, image, hints):
+            raise RuntimeError("out of memory")
+
+    with pdfplumber.open(rich_pdf) as pdf:
+        figures = extract_figures(rich_pdf, pdf, Crashing())
+    assert sorted(f.page for f in figures) == [3, 4]
+
+
+def test_figure_crops_are_saved_and_recorded_on_the_chunk(rich_pdf, tmp_path):
+    with pdfplumber.open(rich_pdf) as pdf:
+        figures = extract_figures(rich_pdf, pdf)
+    chunks = figure_chunks(figures, FakeDescriber(), "doc1", "r.pdf",
+                           figures_dir=tmp_path / "figs")
+    assert len(chunks) == 2
+    for c in chunks:
+        assert (tmp_path / "figs" / "doc1" / f"p{c.page}-f0.png").is_file()
+        assert c.image_path.endswith(f"p{c.page}-f0.png")
+
+
+def test_the_describer_gets_the_page_text_as_context(rich_pdf):
+    with pdfplumber.open(rich_pdf) as pdf:
+        figures = extract_figures(rich_pdf, pdf)
+    describer = FakeDescriber()
+    figure_chunks(figures, describer, "d", "r.pdf")
+    assert any("Sales chart page" in c for c in describer.contexts)
+
+
+def test_image_path_survives_the_vector_store(rich_pdf, tmp_path, fake_embedder):
+    qa = DocQA(VectorStore(str(tmp_path / "db")), fake_embedder, FakeGenerator(),
+               min_score=0.1, describer=FakeDescriber(), figures_dir=tmp_path / "figs")
+    qa.ingest_pdf(rich_pdf)
+    hit = next(r for r in qa.retrieve("bar chart of quarterly sales rising")
+               if r.chunk.kind == "figure")
+    assert hit.chunk.image_path.startswith(str(tmp_path / "figs"))
+    text_hit = next(r for r in qa.retrieve("annual report introduction") if r.chunk.kind == "text")
+    assert text_hit.chunk.image_path == ""
+
+
+def _figure(page=1, bbox=Box(100, 400, 700, 900), color="white", draw=True, size=(600, 500)):
+    img = Image.new("RGB", size, color)
+    if draw:
+        d = ImageDraw.Draw(img)
+        top = size[1] // 5
+        for x in range(0, size[0], 40):
+            d.rectangle((x, top, x + 20, size[1] - 1), fill="black")
+    return Figure(page, 0, img, bbox, (1000, 1400), "")
+
+
+def test_logo_in_the_header_is_decorative_but_a_header_sized_chart_is_not():
+    logo = _figure(bbox=Box(50, 20, 250, 100), size=(200, 80))
+    assert is_probably_decorative(logo)
+    big_chart_at_top = _figure(bbox=Box(50, 20, 950, 600))
+    assert not is_probably_decorative(big_chart_at_top)
+
+
+def test_same_small_image_on_several_pages_is_a_logo():
+    small = _figure(bbox=Box(400, 600, 600, 700), size=(200, 100))
+    assert not is_probably_decorative(small, repeated_on_pages=1)
+    assert is_probably_decorative(small, repeated_on_pages=2)
+    assert not is_probably_decorative(_figure(), repeated_on_pages=3)   # big, so not a logo
+
+
+def test_blank_crop_is_decorative():
+    assert is_probably_decorative(_figure(draw=False))
+
+
+def test_average_hash_matches_identical_images_only():
+    assert average_hash(_figure().image) == average_hash(_figure().image)
+    assert average_hash(_figure().image) != average_hash(_figure(draw=False, color="black").image)
+
+
+def test_logos_are_dropped_before_any_vision_call(tmp_path):
+    def logo(page):
+        return _figure(page=page, bbox=Box(50, 20, 250, 100), size=(200, 80))
+
+    describer = FakeDescriber()
+    chunks = figure_chunks([logo(1), _figure(page=2), logo(3)], describer, "d", "r.pdf",
+                           figures_dir=tmp_path)
+    assert describer.calls == 1                            # only the chart is paid for
+    assert [c.page for c in chunks] == [2]
+
+
+def test_save_figure_writes_a_png(tmp_path):
+    path = save_figure(_figure(page=7), tmp_path / "figs", "docx")
+    assert path.endswith("p7-f0.png")
+    assert Image.open(path).size == (600, 500)
+
+
+def test_a_small_header_logo_does_not_hide_a_chart_on_the_same_page(tmp_path):
+    logo = Image.new("RGB", (120, 50), "navy")
+    logo_path = tmp_path / "logo.png"
+    logo.save(logo_path)
+    path = tmp_path / "logo_and_chart.pdf"
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.drawImage(str(logo_path), 50, 770, width=120, height=50)     # under 80 pt tall
+    chart = VerticalBarChart()
+    chart.x, chart.y, chart.width, chart.height = 30, 30, 300, 200
+    chart.data = [[10, 20, 35, 50]]
+    drawing = Drawing(400, 300)
+    drawing.add(chart)
+    renderPDF.draw(drawing, c, 50, 400)
+    c.showPage()
+    c.save()
+    with pdfplumber.open(path) as pdf:
+        assert pdf.pages[0].images                                  # the logo is really there
+        hints = page_hint_boxes(pdf.pages[0])
+    assert len(hints) == 1 and hints[0].width > 200 and hints[0].height > 200
+
+
+def test_chart_box_includes_its_axis_labels(tmp_path):
+    path = tmp_path / "labelled_chart.pdf"
+    c = canvas.Canvas(str(path), pagesize=A4)
+    chart = VerticalBarChart()
+    chart.x, chart.y, chart.width, chart.height = 40, 30, 300, 200
+    chart.data = [[10, 20, 35, 50]]
+    chart.categoryAxis.categoryNames = ["Q1", "Q2", "Q3", "Q4"]
+    drawing = Drawing(400, 300)
+    drawing.add(chart)
+    c.drawString(50, 800, "Far away title that is not part of the chart")
+    renderPDF.draw(drawing, c, 50, 400)
+    c.showPage()
+    c.save()
+    with pdfplumber.open(path) as pdf:
+        page = pdf.pages[0]
+        hint, = page_hint_boxes(page, scale=1)
+        words = {w["text"]: w for w in page.extract_words()}
+    for label in ("Q1", "Q4", "50"):                    # axis labels sit outside the shapes
+        w = words[label]
+        assert hint.x0 <= w["x0"] and hint.x1 >= w["x1"], label
+        assert hint.y0 <= w["top"] and hint.y1 >= w["bottom"], label
+    assert hint.y0 > words["Far"]["bottom"]             # unrelated text stays outside
+
+
+def test_axis_labels_stay_in_the_crop_even_if_the_segmenter_outlines_only_the_drawing(tmp_path):
+    path = tmp_path / "labelled_chart.pdf"
+    c = canvas.Canvas(str(path), pagesize=A4)
+    chart = VerticalBarChart()
+    chart.x, chart.y, chart.width, chart.height = 40, 30, 300, 200
+    chart.data = [[10, 20, 35, 50]]
+    chart.categoryAxis.categoryNames = ["Q1", "Q2", "Q3", "Q4"]
+    drawing = Drawing(400, 300)
+    drawing.add(chart)
+    renderPDF.draw(drawing, c, 50, 400)
+    c.showPage()
+    c.save()
+    with pdfplumber.open(path) as pdf:
+        page = pdf.pages[0]
+        drawn = [(o["x0"], o["top"], o["x1"], o["bottom"])
+                 for o in page.curves + page.rects + page.lines]
+        tight = Box(min(d[0] for d in drawn) * 2, min(d[1] for d in drawn) * 2,
+                    max(d[2] for d in drawn) * 2, max(d[3] for d in drawn) * 2)
+        words = {w["text"]: w for w in page.extract_words()}
+        figures = extract_figures(path, pdf, FixedSegmenter([tight]))
+    crop_box = figures[0].bbox            # pixels at 2x
+    for label in ("Q1", "Q4", "50"):
+        w = words[label]
+        assert crop_box.x0 <= w["x0"] * 2 and crop_box.x1 >= w["x1"] * 2, label
+        assert crop_box.y0 <= w["top"] * 2 and crop_box.y1 >= w["bottom"] * 2, label

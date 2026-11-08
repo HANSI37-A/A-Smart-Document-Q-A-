@@ -126,3 +126,71 @@ def test_bad_api_key_is_not_retried():
     with pytest.raises(openai.APIStatusError):
         gen.generate("Q?", [result("t")])
     assert client.models_used == ["main"]
+
+
+# ---------------- images and conversation history ----------------
+
+def figure_result(tmp_path, n=1):
+    from PIL import Image
+    path = tmp_path / f"fig{n}.png"
+    Image.new("RGB", (60, 40), "green").save(path)
+    chunk = Chunk(id=f"x-p2-f{n}", text="Figure on page 2: Bar chart of sales.", source="h.pdf",
+                  page=2, doc_id="x", kind="figure", image_path=str(path))
+    return SearchResult(chunk, 0.8)
+
+
+def test_images_are_sent_as_image_parts_and_use_the_vision_model(tmp_path):
+    fig = figure_result(tmp_path)
+    client = FakeClient("Sales rise [2].")
+    gen = OpenRouterGenerator(client, "text-model", vision_model="vision-model")
+    gen.generate("What does the chart show?", [result("Sales text."), fig], images=[fig])
+
+    sent = client.requests[0]
+    assert sent["model"] == "vision-model"
+    content = sent["messages"][-1]["content"]
+    assert content[0]["type"] == "text"
+    assert "<images>" in content[0]["text"] and "source [2]" in content[0]["text"]
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_without_images_the_request_is_plain_text_on_the_main_model():
+    client = FakeClient()
+    OpenRouterGenerator(client, "text-model", vision_model="vision-model").generate(
+        "Q?", [result("t")])
+    sent = client.requests[0]
+    assert sent["model"] == "text-model"
+    assert isinstance(sent["messages"][-1]["content"], str)
+    assert "<images>" not in sent["messages"][-1]["content"]
+
+
+def test_an_image_whose_file_is_gone_is_left_out(tmp_path):
+    fig = figure_result(tmp_path)
+    (tmp_path / "fig1.png").unlink()
+    client = FakeClient()
+    OpenRouterGenerator(client, "text-model", vision_model="vision-model").generate(
+        "Q?", [fig], images=[fig])
+    assert client.requests[0]["model"] == "text-model"
+    assert isinstance(client.requests[0]["messages"][-1]["content"], str)
+
+
+def test_an_image_that_is_not_among_the_sources_is_not_sent(tmp_path):
+    fig = figure_result(tmp_path)
+    client = FakeClient()
+    OpenRouterGenerator(client).generate("Q?", [result("t")], images=[fig])
+    assert isinstance(client.requests[0]["messages"][-1]["content"], str)
+
+
+def test_history_comes_between_the_system_prompt_and_the_question():
+    from rag.models import Turn
+    client = FakeClient()
+    history = [Turn("user", "How much leave?"), Turn("assistant", "14 days [1].")]
+    OpenRouterGenerator(client).generate("And sick leave?", [result("t")], history=history)
+    roles = [m["role"] for m in client.requests[0]["messages"]]
+    assert roles == ["system", "user", "assistant", "user"]
+    assert client.requests[0]["messages"][1]["content"] == "How much leave?"
+    assert "Question: And sick leave?" in client.requests[0]["messages"][-1]["content"]
+
+
+def test_build_prompt_without_images_is_unchanged():
+    assert "<images>" not in build_prompt("Q?", [result("t")])

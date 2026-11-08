@@ -56,3 +56,18 @@ def test_search_only_mode_without_generator(tmp_path, fake_embedder, sample_pdf)
 def test_empty_question_is_rejected(qa):
     with pytest.raises(ValueError):
         qa.ask("   ")
+
+def test_deleting_a_document_removes_its_chunks_and_saved_figures(tmp_path, fake_embedder,
+                                                                   sample_pdf):
+    figs = tmp_path / "figs"
+    qa = DocQA(VectorStore(str(tmp_path / "db")), fake_embedder, FakeGenerator(),
+               figures_dir=figs)
+    report = qa.ingest_pdf(sample_pdf)
+    (figs / report.doc_id).mkdir(parents=True)
+    (figs / report.doc_id / "p1-f0.png").write_bytes(b"png")
+    (figs / "other-doc").mkdir()
+
+    qa.delete_document(report.doc_id)
+    assert qa.store.count() == 0
+    assert not (figs / report.doc_id).exists()
+    assert (figs / "other-doc").exists()          # other documents are untouched
