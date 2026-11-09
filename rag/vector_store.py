@@ -5,6 +5,20 @@ import chromadb
 from rag.models import Chunk, SearchResult
 
 
+def _metadata(c: Chunk) -> dict:
+    meta = {"source": c.source, "page": c.page, "doc_id": c.doc_id, "kind": c.kind}
+    if c.image_path:                      # Chroma does not accept None values
+        meta["image_path"] = c.image_path
+    return meta
+
+
+def _chunk(id_: str, text: str, meta: dict) -> Chunk:
+    # .get() with defaults: indexes built before these fields existed still load
+    return Chunk(id=id_, text=text, source=meta["source"], page=meta["page"],
+                 doc_id=meta["doc_id"], kind=meta.get("kind", "text"),
+                 image_path=meta.get("image_path", ""))
+
+
 class VectorStore:
     def __init__(self, path: str, collection: str = "documents"):
         self._client = chromadb.PersistentClient(path=path)
@@ -22,8 +36,7 @@ class VectorStore:
             ids=[c.id for c in chunks],
             embeddings=embeddings,
             documents=[c.text for c in chunks],
-            metadatas=[{"source": c.source, "page": c.page, "doc_id": c.doc_id, "kind": c.kind}
-                       for c in chunks],
+            metadatas=[_metadata(c) for c in chunks],
         )
 
     def search(self, query_embedding: list[float], k: int = 5) -> list[SearchResult]:
@@ -34,14 +47,35 @@ class VectorStore:
             n_results=k,
             include=["documents", "metadatas", "distances"],
         )
-        results = []
-        for id_, text, meta, dist in zip(res["ids"][0], res["documents"][0],
-                                         res["metadatas"][0], res["distances"][0]):
-            chunk = Chunk(id=id_, text=text, source=meta["source"],
-                          page=meta["page"], doc_id=meta["doc_id"],
-                          kind=meta.get("kind", "text"))
-            results.append(SearchResult(chunk=chunk, score=round(1 - dist, 4)))
-        return results
+        return [SearchResult(chunk=_chunk(id_, text, meta), score=round(1 - dist, 4))
+                for id_, text, meta, dist in zip(res["ids"][0], res["documents"][0],
+                                                 res["metadatas"][0], res["distances"][0])]
+
+    def figures_on_pages(self, pages: list[tuple[str, int]]
+                         ) -> list[tuple[Chunk, list[float]]]:
+        """Figure chunks (with their stored embeddings) on the given (doc_id, page) pairs.
+
+        Used to find the chart that sits next to a retrieved paragraph."""
+        found = []
+        by_doc: dict[str, set[int]] = {}
+        for doc_id, page in pages:
+            by_doc.setdefault(doc_id, set()).add(page)
+        for doc_id, doc_pages in by_doc.items():
+            res = self._col.get(
+                where={"$and": [{"kind": "figure"}, {"doc_id": doc_id},
+                                {"page": {"$in": sorted(doc_pages)}}]},
+                include=["documents", "metadatas", "embeddings"],
+            )
+            for id_, text, meta, emb in zip(res["ids"], res["documents"], res["metadatas"],
+                                            res["embeddings"]):
+                found.append((_chunk(id_, text, meta), [float(x) for x in emb]))
+        return found
+
+    def embeddings_for(self, ids: list[str]) -> dict[str, list[float]]:
+        if not ids:
+            return {}
+        res = self._col.get(ids=ids, include=["embeddings"])
+        return {id_: [float(x) for x in emb] for id_, emb in zip(res["ids"], res["embeddings"])}
 
     def documents(self) -> dict[str, str]:
         metas = self._col.get(include=["metadatas"])["metadatas"]

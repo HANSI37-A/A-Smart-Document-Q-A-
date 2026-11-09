@@ -45,9 +45,13 @@ class FakeGenerator:
     def __init__(self, reply: str = "Employees get 14 days of annual leave [1]."):
         self.reply = reply
         self.calls: list[tuple[str, list[SearchResult]]] = []
+        self.histories: list[list] = []   # chat history passed with each call
+        self.images: list[list] = []      # figures attached to each call
 
-    def generate(self, question, results):
+    def generate(self, question, results, history=(), images=()):
         self.calls.append((question, results))
+        self.histories.append(list(history))
+        self.images.append(list(images))
         return self.reply
 
 

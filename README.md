@@ -26,7 +26,9 @@ If the documents don't contain the answer, the app says so instead of guessing.
 - **Multimodal understanding**
   - **Text**: cleaned page text, split into overlapping chunks.
   - **Tables**: detected with `pdfplumber` and converted to Markdown so rows and columns stay searchable.
-  - **Images & charts**: pages with photos or charts are rendered to images and **captioned by a vision model**. The caption is indexed like any other text, so you can ask "what does the chart on page 7 show?".
+  - **Images & charts**: figures are cut out of the page with **SAM (MobileSAM)**, logos and decorative images are dropped, and a **vision model captions** the rest. The caption is indexed like any other text, so you can ask "what does the chart on page 7 show?". The cropped picture is saved too.
+- **Image-aware answers**: for each question the app decides whether a figure would help (a similarity filter, then a small LLM judge). Only useful figures are sent to the model together with the text and shown under the answer. Most questions get no image.
+- **Conversation memory**: chats are saved (SQLite) and listed in the sidebar. A follow-up such as "what about part-time staff?" is rewritten into a standalone question before searching, and recent turns go into the answer prompt.
 - **Exact citations**: every answer links back to `file, page`, with the cited sources highlighted and tagged as text, table or figure.
 - **Vector search with similarity scores**: results are ranked by cosine similarity, and weak matches below a threshold are dropped.
 - **Strict hallucination prevention**: the model is told to answer only from the retrieved sources and to reply *"I couldn't find that in the documents."* otherwise. If nothing relevant is retrieved, the model isn't called at all.
@@ -45,6 +47,8 @@ If the documents don't contain the answer, the app says so instead of guessing.
 | **Core language** | Python 3.11+ |
 | **PDF & multimodal parsing** | [`pypdf`](https://pypi.org/project/pypdf/) (text), [`pdfplumber`](https://pypi.org/project/pdfplumber/) (tables, image/chart detection), [`pypdfium2`](https://pypi.org/project/pypdfium2/) (page rendering) |
 | **Embeddings** | [`fastembed`](https://pypi.org/project/fastembed/) running **locally on CPU** with `BAAI/bge-small-en-v1.5` (no GPU, no API key) |
+| **Image segmentation** | [`ultralytics`](https://docs.ultralytics.com/models/mobile-sam/) with **MobileSAM** (needs PyTorch), run locally on CPU |
+| **Chat memory** | `sqlite3` from the standard library |
 | **Vector database** | [`chromadb`](https://www.trychroma.com/): embedded, persistent, cosine similarity |
 | **LLM / vision** | [OpenRouter](https://openrouter.ai/) through the standard `openai` SDK. OpenRouter gives access to many models (OpenAI, Google Gemini, Anthropic Claude, …) with one key |
 | **Web UI** | [Streamlit](https://streamlit.io/) |
@@ -107,6 +111,11 @@ OPENROUTER_API_KEY=your-openrouter-api-key
 # TOP_K=5                               # passages sent to the model
 # MIN_SCORE=0.5                         # minimum similarity to count as relevant
 # DATA_DIR=./data
+# SEGMENTER=sam                         # sam | none
+# IMAGE_MIN_SCORE=0.45                  # caption similarity needed to consider a figure
+# MAX_IMAGES=2                          # most figures sent with one question
+# HELPER_MODEL=                         # small model for follow-up rewriting and image judging
+# MEMORY_MESSAGES=6                     # earlier messages used to understand follow-ups
 ```
 
 - **Using Gemini or Claude:** set `OPENROUTER_MODEL` to an OpenRouter model id, such as `google/gemini-2.5-flash` or an Anthropic model id from [openrouter.ai/models](https://openrouter.ai/models). A direct `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` is **not** used.
@@ -134,9 +143,14 @@ source .venv/bin/activate
 
 ### 2. Install dependencies
 
+SAM needs PyTorch. Install the **CPU build first**: it is far smaller than the default (CUDA) download.
+
 ```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
+
+The MobileSAM weights (~40 MB) download on first use into `data/models/`. If PyTorch or `ultralytics` is missing, or `SEGMENTER=none`, the app still works and crops figures from the boxes `pdfplumber` finds.
 
 ### 3. Add your API key
 
@@ -158,13 +172,15 @@ Open <http://localhost:8501>, upload PDFs in the sidebar, click **Add to index**
 ```bash
 python cli.py ingest sample_docs/employee_handbook.pdf
 python cli.py ask "How many days of annual leave do I get?"
+python cli.py chat          # a conversation with memory; type exit to stop
 python cli.py docs
 ```
 
 ### Generate the sample document
 
 ```bash
-python scripts/make_sample_pdf.py     # creates sample_docs/employee_handbook.pdf
+python scripts/make_sample_pdf.py            # creates sample_docs/employee_handbook.pdf (text only)
+python scripts/make_sample_report_pdf.py     # creates sample_docs/nimbus_annual_report.pdf (charts, table, diagram, logo)
 ```
 
 ### Run the tests and the retrieval evaluation
@@ -196,7 +212,7 @@ python eval/evaluate.py                                   # hit@1, hit@k, MRR on
 │   └── models.py           # Dataclasses: Page, Chunk, SearchResult, Answer
 ├── eval/                   # Retrieval-quality evaluation
 ├── scripts/                # Sample PDF generator
-├── sample_docs/            # Example PDF
+├── sample_docs/            # Example PDFs: a text handbook and an annual report with charts
 └── tests/                  # pytest suite with fakes (no network needed)
 ```
 
