@@ -2,14 +2,16 @@
 
 Run: streamlit run app.py
 """
+import contextlib
 import tempfile
 from pathlib import Path
 
 import streamlit as st
 
-from rag.config import build_app, build_chat_store, load_settings
+from rag.config import build_app, build_chat_store, build_voice, load_settings
 from rag.memory import recent_history
 from rag.pdf_loader import NoTextError
+from rag.voice import VoiceError, question_from_input, speech_text
 
 st.set_page_config(page_title="Document Q&A", page_icon=":material/description:", layout="wide")
 
@@ -24,9 +26,30 @@ def get_chats():
     return build_chat_store()
 
 
+settings = load_settings()
+
+
+@st.cache_resource   # loads the speech voice once; Whisper itself loads on first use
+def get_voice():
+    return build_voice(settings)
+
+
 app = get_app()
 chats = get_chats()
-settings = load_settings()
+transcriber, speaker = get_voice()   # either is None when voice is off or not installed
+
+
+@st.cache_data(max_entries=50, show_spinner="Speaking...")
+def speak(text: str) -> bytes:
+    """WAV for a text. Cached, so replaying an answer costs nothing."""
+    return speaker.synthesize(text)
+
+
+def speak_answer(content: str) -> bytes | None:
+    """Audio for an answer (no citation markers or Markdown); None if there is nothing to say."""
+    text = speech_text(content)
+    return speak(text) if text else None
+
 
 if "chat_id" not in st.session_state or (
         st.session_state.chat_id and not chats.exists(st.session_state.chat_id)):
@@ -87,11 +110,18 @@ with st.sidebar:
 
     st.divider()
     if app.generator is None:
-        st.warning("No OPENROUTER_API_KEY set: search-only mode (shows passages, no answers).")
+        st.warning("No GEMINI_API_KEY or OPENROUTER_API_KEY set: search-only mode "
+                   "(shows passages, no answers).")
     else:
-        st.caption(f"Model: {settings.model}")
+        st.caption(f"Model: {settings.model} ({settings.llm_provider})")
         st.caption("Charts and images: " + ("read by a vision model" if app.describer
                                               else "not indexed (VISION_PROVIDER=none)"))
+    if transcriber or speaker:
+        st.caption(f":material/mic: Voice: heard by {transcriber.label if transcriber else 'off'}"
+                   f", spoken by {speaker.label if speaker else 'off'}")
+    elif settings.voice_stt != "none" or settings.voice_tts != "none":
+        st.caption(":material/mic_off: Voice is off. Install it with "
+                   "`pip install -r requirements-voice.txt`.")
 
 # ---------------- main area: chat ----------------
 st.title(":material/description: Ask your documents")
@@ -118,30 +148,53 @@ def show_sources(sources, cited):
             st.caption(s["text"])
 
 
-def show_message(msg):
+def show_message(msg, key=None):
+    """Draw one message. `key` (saved messages only) enables the Listen button."""
     st.markdown(msg["content"])
+    if msg.get("role") == "user" and msg.get("voice"):
+        st.caption(":material/mic: Spoken question")
     query = msg.get("search_query", "")
     if query and msg.get("question") and query.strip().lower() != msg["question"].strip().lower():
         st.caption(f":material/search: Searched for: {query}")
     show_images(msg.get("images", []))
     show_sources(msg.get("sources", []), msg.get("cited", []))
+    if key and speaker and msg.get("role") == "assistant" and not msg.get("error"):
+        if st.button("Listen", key=key, icon=":material/volume_up:", type="tertiary"):
+            try:
+                audio = speak_answer(msg["content"])
+                if audio:
+                    st.audio(audio, format="audio/wav", autoplay=True)
+            except VoiceError as e:
+                st.warning(str(e))
 
 
 messages = chats.messages(st.session_state.chat_id) if st.session_state.chat_id else []
 
-# Streamlit re-runs this whole script on every interaction, so redraw the history.
-for msg in messages:
-    with st.chat_message(msg["role"]):
-        show_message(msg)
+# A spoken answer is made while handling the question, then played after the redraw below.
+pending_audio = st.session_state.pop("pending_audio", None)
+voice_notice = st.session_state.pop("voice_notice", None)
 
-if question := st.chat_input("Ask a question about your documents"):
+# Streamlit re-runs this whole script on every interaction, so redraw the history.
+for i, msg in enumerate(messages):
+    with st.chat_message(msg["role"]):
+        show_message(msg, key=f"listen-{st.session_state.chat_id}-{i}")
+        if i == len(messages) - 1 and msg["role"] == "assistant":
+            if pending_audio:
+                st.audio(pending_audio, format="audio/wav", autoplay=settings.voice_autoplay)
+            if voice_notice:
+                st.warning(voice_notice)
+
+
+def handle_question(question: str, *, spoken: bool = False):
+    """Answer a question, save both messages and redraw. Typed and spoken questions share this."""
     if st.session_state.chat_id is None:
         st.session_state.chat_id = chats.create_chat()
     chat_id = st.session_state.chat_id
     history = recent_history(messages, settings.memory_messages)   # memory for follow-ups
-    chats.add_message(chat_id, "user", question)
+    voice_meta = {"voice": True} if spoken else {}
+    chats.add_message(chat_id, "user", question, **voice_meta)
     with st.chat_message("user"):
-        st.markdown(question)
+        show_message({"role": "user", "content": question, **voice_meta})
 
     with st.chat_message("assistant"):
         with st.spinner("Searching..."):
@@ -162,6 +215,37 @@ if question := st.chat_input("Ask a question about your documents"):
                 reply = {"content": f":material/error: Something went wrong: {e}", "error": True}
         show_message(reply)
 
+        if spoken and speaker and not reply.get("error"):
+            with st.spinner("Preparing the spoken answer..."):
+                try:
+                    st.session_state.pending_audio = speak_answer(reply["content"])
+                except VoiceError as e:   # the written answer is still shown
+                    st.session_state.voice_notice = str(e)
+
     content = reply.pop("content")
     chats.add_message(chat_id, "assistant", content, **reply)
     st.rerun()   # redraw so the sidebar shows the new or renamed chat
+
+
+def read_question(value):
+    """(question, spoken) from the chat bar; shows what went wrong if speech was not understood."""
+    recording = (not isinstance(value, str) and value.audio is not None
+                 and not (value.text or "").strip())
+    try:
+        with st.spinner("Transcribing...") if recording else contextlib.nullcontext():
+            question, spoken = question_from_input(value, transcriber)
+    except VoiceError as e:
+        st.error(str(e))
+        return "", False
+    if spoken and not question:
+        st.warning("I didn't catch that. Please try again.")
+    return question, spoken
+
+
+placeholder = "Ask a question about your documents"
+value = st.chat_input(placeholder + (" or tap the microphone" if transcriber else ""),
+                      accept_audio=transcriber is not None)
+if value is not None:
+    question, spoken = read_question(value)
+    if question:
+        handle_question(question, spoken=spoken)

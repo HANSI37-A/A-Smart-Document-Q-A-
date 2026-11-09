@@ -1,0 +1,9 @@
+# Optional: voice assistant (push-to-talk). Install with:
+#   pip install -r requirements-voice.txt
+# Speech-to-text (local)
+faster-whisper>=1.2,<2
+# faster-whisper 1.2 calls av.open(metadata_errors=...), which PyAV 17+ removed
+av>=14,<17
+# Text-to-speech (local): Piper (neural voice) with pyttsx3 (Windows SAPI5) as a fallback
+piper-tts>=1.3,<2
+pyttsx3>=2.90,<3
