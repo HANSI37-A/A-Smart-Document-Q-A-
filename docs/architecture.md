@@ -14,6 +14,7 @@ This document describes the code as implemented. File and symbol names refer to 
 6. [Testing and quality assurance](#6-testing-and-quality-assurance)
 7. [Known limitations and extension points](#7-known-limitations-and-extension-points)
 8. [Image-aware answers and conversation memory](#8-image-aware-answers-and-conversation-memory)
+9. [Voice assistant](#9-voice-assistant)
 
 ---
 
@@ -64,7 +65,7 @@ It measures how close two vectors point in the same direction. 1 means very simi
 | Embedder | `rag/embeddings.py` | `Embedder` protocol and local `FastEmbedder`. |
 | Vector store | `rag/vector_store.py` | Chroma wrapper: add, search, list, delete, close. |
 | Generator | `rag/generator.py` | Prompt building, model call, citation parsing. |
-| LLM client | `rag/openrouter.py` | OpenAI-SDK client for OpenRouter, retry and fallback. |
+| LLM client | `rag/openrouter.py`, `rag/gemini.py` | OpenAI-SDK clients for OpenRouter and for Gemini (its OpenAI-compatible endpoint), plus the shared retry and fallback. |
 | Data classes | `rag/models.py` | `Page`, `Chunk`, `SearchResult`, `Answer`. |
 
 ### 1.3 Component interaction
@@ -125,7 +126,8 @@ question ─► Embedder.embed_query ─► Chroma top-k (cosine) ─► drop sc
 - `get_app()` is decorated with `@st.cache_resource`, so the object graph (including the embedding model, which is slow to load) is built **once per server process**, not on every rerun. Changing `.env` or code therefore needs a Streamlit restart.
 - Uploaded files are written to a `NamedTemporaryFile(delete=False)` because `pypdf`, `pdfplumber` and `pypdfium2` all need a real path. The file is removed in a `finally` block.
 - The sidebar lists indexed documents (`store.documents()`), offers per-document deletion (`store.delete_document(doc_id)`), and reports the active model and whether charts and images are being read.
-- Chat history lives in `st.session_state.messages`. Each assistant message stores its `sources` and `cited` lists so the history can be redrawn on every rerun.
+- Chats are saved in `ChatStore` (SQLite) and the current one is tracked by `st.session_state.chat_id`. Each assistant message stores its `sources` and `cited` lists so the history can be redrawn on every rerun.
+- `handle_question()` is the single path for answering: typed and spoken questions both go through it. Voice adds only an input step and an output step around it (section 9).
 - The Sources panel shows `[n] file, page p`, a `table` or `figure` tag for non-text chunks, the similarity score, a star for sources the model actually cited, and the passage text.
 - Exceptions from `app.ask()` (for example an invalid key, or all models busy) are caught and shown as a message in the chat instead of crashing the page.
 
@@ -396,11 +398,16 @@ Prompt rules reduce hallucination but cannot guarantee that it never happens. Th
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OPENROUTER_API_KEY` | none | Enables answer generation and vision. Absent or empty means search-only mode. |
-| `OPENROUTER_MODEL` | `openai/gpt-4o-mini` | Model used for answers. Any OpenRouter model id. |
+| `LLM_PROVIDER` | `auto` | `auto`, `gemini` or `openrouter`. `auto` picks Gemini when `GEMINI_API_KEY` is set, otherwise OpenRouter. |
+| `GEMINI_API_KEY` | none | Enables answers, vision and (by default) voice through Gemini. |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Model used for answers when Gemini is the provider. |
+| `GEMINI_FALLBACK_MODEL` | none | Optional second Gemini model tried if the main one stays unavailable. |
+| `GEMINI_REASONING` | none | Optional `reasoning_effort` (for example `low`) sent with every Gemini request. |
+| `OPENROUTER_API_KEY` | none | Enables answers and vision through OpenRouter. With neither key set, the app is in search-only mode. |
+| `OPENROUTER_MODEL` | `openai/gpt-4o-mini` | Model used for answers when OpenRouter is the provider. Any OpenRouter model id. |
 | `OPENROUTER_FALLBACK_MODEL` | none | Optional second model tried if the main model stays unavailable. |
-| `VISION_PROVIDER` | `openrouter` | `openrouter` or `none`. `none` skips figure captioning. |
-| `VISION_MODEL` | same as `OPENROUTER_MODEL` | Model used for images; it must accept image input. |
+| `VISION_PROVIDER` | `auto` | `auto` (describe figures with the answering provider) or `none` (skip figure captioning). |
+| `VISION_MODEL` | same as the answer model | Model used for images; it must accept image input. |
 | `OPENROUTER_SITE_URL` | `http://localhost:8501` | Sent as the optional `HTTP-Referer` attribution header. |
 | `OPENROUTER_APP_NAME` | `Document Q&A` | Sent as the optional `X-Title` attribution header. |
 | `DATA_DIR` | `./data` | Parent folder of the Chroma database. |
@@ -414,7 +421,7 @@ Prompt rules reduce hallucination but cannot guarantee that it never happens. Th
 `build_app(settings=None)` is the one place where real objects are created and wired:
 
 1. Always creates the `VectorStore` and `FastEmbedder`.
-2. If `OPENROUTER_API_KEY` is set, creates one OpenAI-SDK client with `make_client()` and builds the `OpenRouterGenerator`. If `VISION_PROVIDER=openrouter`, it also builds the `OpenRouterVisionDescriber`, which shares the same client.
+2. `build_llm_client()` returns the chat client of the chosen provider (`make_gemini_client()` or `make_client()`), or `None` without a key. With a client, it builds the `OpenRouterGenerator`, rewriter, image judge and, unless `VISION_PROVIDER=none`, the `OpenRouterVisionDescriber`, which all share that client. Despite their names these classes only need an OpenAI-style `chat.completions.create`, so they run on either provider unchanged.
 3. Returns `DocQA(store, embedder, generator, top_k, min_score, describer)`.
 
 Heavy imports happen inside the function, so importing `rag.config` stays cheap. Because `DocQA` receives its dependencies instead of creating them, tests construct it directly with fakes and never touch the network.
@@ -463,6 +470,15 @@ client.chat.completions.create(
 
 **Paths and shells.** Paths are built with `pathlib`, so Windows and POSIX separators both work. `README.md` gives PowerShell activation (`.venv\Scripts\Activate.ps1`) and `copy` commands alongside the POSIX equivalents.
 
+### 5.5 Gemini (`rag/gemini.py`)
+
+Gemini is reached through its OpenAI-compatible endpoint (`https://generativelanguage.googleapis.com/v1beta/openai/`) with the same `openai` SDK, so the generator, rewriter, image judge and vision describer are unchanged. `GeminiClient` wraps `openai.OpenAI` and makes two adjustments:
+
+- **Thinking headroom.** Gemini's newer models think before answering, and thinking tokens count against `max_tokens`. Every request gets `THINKING_HEADROOM` (1,024) extra tokens, so a small limit such as the rewriter's 256 cannot be used up before any answer text appears.
+- **Optional `reasoning_effort`.** Sent only when `GEMINI_REASONING` is set; otherwise the model's own default is used.
+
+It sends no OpenRouter attribution headers, keeps `max_retries=0` and `timeout=60`, and relies on `call_with_retry` exactly as before. `OpenRouterBusyError` keeps its name but its message is provider-neutral.
+
 ---
 
 ## 6. Testing and quality assurance
@@ -476,13 +492,15 @@ The suite runs with `pytest` and needs **no network, API key or paid calls**. Ex
 | `FakeEmbedder` | `FastEmbedder` | Hashes words into a 256-slot bag-of-words vector, so texts that share words are close. Fast and deterministic. |
 | `FakeGenerator` | `OpenRouterGenerator` | Records `(question, results)` and returns a fixed answer with a citation. |
 | `FakeDescriber` | `OpenRouterVisionDescriber` | Returns a fixed caption and counts calls. It also asserts it received a real rendered page image. |
+| `FakeTranscriber` | `WhisperTranscriber` | Returns a fixed sentence for any recording and keeps the recordings it received. |
+| `FakeSpeaker` | `PiperSpeaker`, `Pyttsx3Speaker` | Returns a tiny fake WAV and records the text it was asked to say. |
 | Fake OpenAI clients | `openai.OpenAI` | Expose `chat.completions.create`, record the payload, and can raise `APIStatusError` with a chosen status code. |
 
 PDFs for multimodal tests are generated on the fly with `reportlab`: a text page, a page with a real grid table, a page with an embedded image, and a page with a bar chart.
 
 ### 6.2 Test modules
 
-121 tests in total:
+194 tests in total:
 
 | Module | Tests | Focus |
 |---|---|---|
@@ -496,10 +514,12 @@ PDFs for multimodal tests are generated on the fly with `reportlab`: a text page
 | `tests/image_selection.py` | 14 | Same-page figures as candidates; unrelated question gets no image and no judge call; judge choices, none, cap, bad indexes; fallback when the judge fails; judge reply parsing; pipeline wiring. |
 | `tests/memory.py` | 17 | Saved chats, titles, reopening, deletion, no locked file; history trimming; follow-up rewriting and its fallbacks; history reaches the answer model. |
 | `tests/sample_report.py` | 5 | The sample annual report keeps its layout: figures only on pages 2, 4 and 5, a logo on every page that is not a figure, the table found and not mistaken for a chart, and numbers that add up. |
-| `tests/app.py` | 3 | Headless Streamlit run (`streamlit.testing.v1.AppTest`): sidebar, search-only warning, a question, and the cited page in the sources; chats are saved, listed in the sidebar, reopen in a new session; New chat starts empty. |
+| `tests/app.py` | 8 | Headless Streamlit run (`streamlit.testing.v1.AppTest`): sidebar, search-only warning, a question, and the cited page in the sources; chats are saved, listed in the sidebar, reopen in a new session; New chat starts empty. Voice (with fakes): off by default in tests, sidebar status and microphone prompt, a spoken question is answered and played, typed questions are not read aloud but the Listen button works, a speech failure keeps the written answer. |
+| `tests/voice.py` | 54 | `speech_text` (citations, Markdown, icons, tables, code, truncation); `question_from_input` (typed, spoken, both, silent); Whisper wrapper (segments, silence, errors, lazy loading); Piper and pyttsx3 wrappers (WAV output, empty text, errors, temp files removed); Gemini speech to text (audio payload, language hint, no-speech reply, errors, busy service); Gemini text to speech (request shape, WAV wrapping, retries, no retry for bad requests, key never in errors, empty or non-audio replies); voice settings; `build_voice` choosing Gemini or local engines, mixing them, and falling back without a key; a real Piper to Whisper round trip (`slow`). |
+| `tests/gemini.py` | 14 | `GeminiClient` (thinking headroom, optional reasoning effort, endpoint and headers, works with the existing rewriter); provider selection (`auto`, forced, both keys, missing key, unknown value); per-provider models; voice defaults following the key; `build_llm_client`. |
 | `tests/retrieval_quality.py` | 2 | Retrieval quality on the sample handbook with the real embedding model. |
 
-Tests that load the real embedding model are marked `slow` (declared in `pytest.ini`).
+Tests that load a real model (embeddings, SAM, Whisper and Piper) are marked `slow` (declared in `pytest.ini`).
 
 ### 6.3 Running the tests
 
@@ -523,9 +543,10 @@ Chunk size, overlap and `k` are command-line options, so settings can be compare
 
 ### 6.4.1 What the tests do not cover
 
-- Real network calls to OpenRouter and the quality of real vision captions. Payloads and error handling are tested with fakes; live quality depends on the chosen model.
+- Real network calls to OpenRouter and Gemini (answers, speech to text, text to speech) and the quality of real vision captions. Payloads and error handling are tested with fakes; live quality depends on the chosen model. The Gemini text-to-speech request follows Google's documented Interactions API and has not been run against the live service in this repository's tests.
 - OCR for scanned PDFs (such files are reported, not read).
 - The heuristics for chart detection on arbitrary real-world PDFs; they are tested on generated PDFs only.
+- The browser microphone itself. `AppTest` can only type text, so the recording step is covered by `question_from_input` and by tests that stand in for it; recognition quality with real voices and accents depends on the Whisper model chosen.
 
 ---
 
@@ -622,3 +643,83 @@ The UI shows "Searched for: ..." when the rewrite differs from what the user typ
 - Text-only helper calls (rewriting, judging) add a small cost to a question, but only when there is history or a candidate figure.
 - SAM runs on CPU and adds about a second or more per figure page at ingestion.
 
+
+---
+
+## 9. Voice assistant
+
+Voice is an input and output layer around the existing pipeline. `DocQA`, retrieval, memory and citations are unchanged.
+
+```
+microphone (browser)
+   |  WAV, 16 kHz  (st.chat_input(accept_audio=True))
+   v
+question_from_input()  -->  Transcriber.transcribe()  (Gemini or Whisper)      rag/voice.py
+   |  text + "spoken" flag
+   v
+handle_question()  -->  DocQA.ask()  -->  answer + sources        app.py, rag/pipeline.py
+   |  answer text (Markdown, [n] citations)
+   v
+speech_text()  -->  Speaker.synthesize()  (Gemini or Piper)  -->  st.audio(autoplay)
+```
+
+### 9.1 Components (`rag/voice.py`)
+
+- `Transcriber` and `Speaker` are `Protocol`s, like every other external dependency. `build_voice()` in `rag/config.py` is the only place the real engines are created.
+- `WhisperTranscriber` wraps `faster-whisper`. The model loads on the first recording, not at start-up. The audio is passed as an in-memory file, so no temporary file is needed. `vad_filter=True` removes silence, and a recording with no speech gives an empty string.
+- `PiperSpeaker` wraps `piper-tts` and returns WAV bytes. `Pyttsx3Speaker` uses the operating system's voice (SAPI5 on Windows) and is the fallback when no Piper voice file is present. It makes a fresh engine per call and initialises COM in the calling thread, because Streamlit runs each session in a worker thread.
+- `GeminiTranscriber` sends the recording to a Gemini model as an `input_audio` part of an ordinary chat request (through the same `GeminiClient`, so `call_with_retry` and the fallback model apply). The prompt asks for the transcript only, and a reply of `NO_SPEECH` becomes an empty string, which the UI reports as "I didn't catch that."
+- `GeminiSpeaker` calls Gemini's native speech endpoint (`POST /v1beta/interactions`, key in the `x-goog-api-key` header) with a TTS model and a prebuilt voice, and decodes the base64 audio from `steps[].content[]`. If the audio has no WAV header, `pcm_to_wav()` adds one (24 kHz, 16-bit, mono). Busy responses (408, 429, 5xx) and network errors are retried with growing waits; bad requests are not, and the key never appears in an error message. Gemini TTS is not part of the OpenAI-compatible API, so it uses `httpx` directly.
+- `speech_text()` prepares an answer for the ear: it removes `[n]` markers (the same pattern `find_citations` reads), Markdown, `:material/...:` icons, links and code blocks, reads tables as plain words, and cuts long answers at a sentence boundary with "See the full answer on screen."
+- `question_from_input()` decides what the chat bar returned: typed text wins, otherwise a recording is transcribed. It is a pure function so it can be tested without a browser.
+- All engine failures are raised as `VoiceError`, whose message is safe to show.
+
+### 9.2 Graceful degradation
+
+`build_voice()` follows the same pattern as `build_segmenter()`. If `faster-whisper` is missing, `VOICE_STT=none`, or a voice file is absent, that half of the feature is switched off with a log warning and the app keeps working:
+
+| Situation | Result |
+|---|---|
+| No voice packages installed | No microphone in the chat bar; the sidebar says how to install voice |
+| Gemini voice chosen but no `GEMINI_API_KEY` | The local engines are used instead, with a warning |
+| Gemini is busy or unreachable for one request | Retried a few times, then the error is shown (speech to text) or a warning appears under the written answer (text to speech); local engines are not tried automatically |
+| Piper voice file missing | Falls back to the system voice (`pyttsx3`) |
+| Neither speech output works | The microphone still works; answers are shown but not spoken |
+| Speech output fails on one answer | The written answer is saved and shown, with a warning under it |
+| Recording has no speech | "I didn't catch that." and nothing is sent |
+
+### 9.3 UI behaviour (`app.py`)
+
+- The microphone is the built-in one in `st.chat_input(accept_audio=True)`, shown only when a transcriber exists. One submit returns text or a recording, so the same recording cannot be processed twice on a rerun.
+- A spoken question is saved with `voice=True` in its message metadata (`ChatStore.add_message(**meta)` already stores extra fields) and is shown with a "Spoken question" caption.
+- The answer to a spoken question is turned into audio while the question is handled and kept in `st.session_state.pending_audio`. The page then reruns to redraw the sidebar, and the audio is played under the newest assistant message on that rerun, then discarded.
+- Typed questions are not read aloud. Every saved assistant answer has a **Listen** button that speaks it on demand. `speak()` is wrapped in `st.cache_data(max_entries=50)` keyed on the text, so replaying costs nothing and no audio is stored in SQLite.
+- `get_voice()` is `@st.cache_resource`, so the voice loads once per server process (changing voice settings needs a restart, like the rest of `.env`).
+
+### 9.4 Settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VOICE_STT` | `gemini` with a Gemini key, else `whisper` | `gemini`, `whisper` or `none` |
+| `WHISPER_MODEL` | `base` | faster-whisper model size; the multilingual models detect the language |
+| `WHISPER_DEVICE` | `cpu` | `cpu` or `cuda` |
+| `WHISPER_COMPUTE` | `int8` | Quantisation (`int8` is fast on CPU) |
+| `VOICE_LANGUAGE` | empty | Force a spoken language; empty detects it |
+| `VOICE_TTS` | `gemini` with a Gemini key, else `piper` | `gemini`, `piper`, `pyttsx3` or `none` |
+| `PIPER_VOICE` | `DATA_DIR/models/piper/en_US-lessac-medium.onnx` | Piper voice (`.onnx` with its `.json` beside it) |
+| `VOICE_AUTOPLAY` | `true` | Start playing a spoken answer right away |
+| `GEMINI_STT_MODEL` | `gemini-3.8-flash` | Gemini model that transcribes recordings |
+| `GEMINI_TTS_MODEL` | `gemini-3.8-flash-tts` | Gemini model that speaks answers |
+| `GEMINI_VOICE` | `Kore` | Gemini prebuilt voice name |
+
+`python scripts/download_voice_models.py` downloads the Whisper model and the Piper voice once. Voice packages are in `requirements-voice.txt`, separate from `requirements.txt`, so the core install stays small.
+
+### 9.5 Limits of this design
+
+- It is push to talk: one recording per question. There is no hands-free listening, interruption of a spoken answer, or streaming of the answer as it is generated.
+- Everything runs on CPU. Expect about 1 to 2 seconds to transcribe a short question with `base`, plus the time the answer model already takes. The first recording also loads the model.
+- The default Piper voice is English. Answers in another language need a matching Piper voice in `PIPER_VOICE`; Whisper itself understands many languages.
+- Browsers allow the microphone only on `localhost` or HTTPS, and may block autoplay until the page has been clicked. The Listen button always works.
+- `requirements-voice.txt` pins `av<17`: `faster-whisper` 1.2 calls `av.open(metadata_errors=...)`, which newer PyAV releases removed.
+- Gemini voice sends the recording, and the answer text, to Google, and needs internet. It is subject to the account's rate limits; the local engines are the offline option.
+- Gemini model ids change over time (older ones are retired). If a request fails with "model not found", set `GEMINI_MODEL`, `GEMINI_STT_MODEL` or `GEMINI_TTS_MODEL` to a current id from Google's model list.

@@ -55,6 +55,33 @@ class FakeGenerator:
         return self.reply
 
 
+class FakeTranscriber:
+    """Speech to text without a model: always 'hears' the same words."""
+
+    label = "Fake ears"
+
+    def __init__(self, text: str = "How long is the probation period?"):
+        self.text = text
+        self.audio: list[bytes] = []   # recordings it was given
+
+    def transcribe(self, audio: bytes) -> str:
+        self.audio.append(audio)
+        return self.text
+
+
+class FakeSpeaker:
+    """Text to speech without a voice: returns a tiny fake WAV and records what it said."""
+
+    label = "Fake voice"
+
+    def __init__(self):
+        self.spoken: list[str] = []
+
+    def synthesize(self, text: str) -> bytes:
+        self.spoken.append(text)
+        return b"RIFF\x00\x00\x00\x00WAVE"
+
+
 @pytest.fixture
 def fake_embedder():
     return FakeEmbedder()
