@@ -29,10 +29,11 @@ If the documents don't contain the answer, the app says so instead of guessing.
   - **Images & charts**: figures are cut out of the page with **SAM (MobileSAM)**, logos and decorative images are dropped, and a **vision model captions** the rest. The caption is indexed like any other text, so you can ask "what does the chart on page 7 show?". The cropped picture is saved too.
 - **Image-aware answers**: for each question the app decides whether a figure would help (a similarity filter, then a small LLM judge). Only useful figures are sent to the model together with the text and shown under the answer. Most questions get no image.
 - **Conversation memory**: chats are saved (SQLite) and listed in the sidebar. A follow-up such as "what about part-time staff?" is rewritten into a standalone question before searching, and recent turns go into the answer prompt.
-- **Voice assistant**: tap the microphone in the chat bar, ask your question aloud, and the answer is shown and **read back to you**. With a Gemini key, **Gemini** hears and speaks (nothing extra to install). Without one, speech recognition (**faster-whisper**) and speech output (**Piper**, with the system voice as a fallback) run locally on your machine. Any answer can also be played later with its **Listen** button. Details are in the *Voice assistant* section below.
+- **Voice assistant**: tap the microphone in the chat bar, ask your question aloud, and the answer is shown and **read back to you**. With an OpenAI or Gemini key, that service hears and speaks (nothing extra to install). Without one, speech recognition (**faster-whisper**) and speech output (**Piper**, with the system voice as a fallback) run locally on your machine. Any answer can also be played later with its **Listen** button. Details are in the *Voice assistant* section below.
 - **Exact citations**: every answer links back to `file, page`, with the cited sources highlighted and tagged as text, table or figure.
 - **Vector search with similarity scores**: results are ranked by cosine similarity, and weak matches below a threshold are dropped.
-- **Strict hallucination prevention**: the model is told to answer only from the retrieved sources and to reply *"I couldn't find that in the documents."* otherwise. If nothing relevant is retrieved, the model isn't called at all.
+- **Strict hallucination prevention**: the model is told to answer only from the retrieved sources and to reply *"I couldn't find that in the documents."* otherwise. If nothing relevant is retrieved, the document model isn't called at all. With the web fallback on, that "not found" case is answered from Google instead, always labelled as a web answer.
+- **Web fallback (Google Search)**: when your PDFs don't contain the answer, the app searches Google (Gemini's *Grounding with Google Search*) and answers from the web instead. Web answers are clearly labelled *"Not found in your documents"*, with clickable web sources and `[n]` citations. Turn it off with `WEB_SEARCH=false`. Details are in the *Web fallback* section below.
 - **Search-only fallback mode**: with no API key, the app still works as a semantic search engine and shows the most relevant passages.
 - **Resilient API calls**: temporary errors (429/5xx, timeouts) are retried with backoff, with an optional fallback model.
 - **Cost-aware ingestion**: re-uploading the same PDF is a no-op, and figures that are already captioned are not sent to the vision model again.
@@ -51,8 +52,8 @@ If the documents don't contain the answer, the app says so instead of guessing.
 | **Image segmentation** | [`ultralytics`](https://docs.ultralytics.com/models/mobile-sam/) with **MobileSAM** (needs PyTorch), run locally on CPU |
 | **Chat memory** | `sqlite3` from the standard library |
 | **Vector database** | [`chromadb`](https://www.trychroma.com/): embedded, persistent, cosine similarity |
-| **LLM / vision** | **[Google Gemini](https://ai.google.dev/)** through its OpenAI-compatible endpoint, or [OpenRouter](https://openrouter.ai/) (many models, one key). Both use the standard `openai` SDK |
-| **Voice** | Gemini speech models, or local and optional: [`faster-whisper`](https://pypi.org/project/faster-whisper/) (speech to text) and [`piper-tts`](https://pypi.org/project/piper-tts/) / [`pyttsx3`](https://pypi.org/project/pyttsx3/) (text to speech) |
+| **LLM / vision** | **[OpenAI](https://platform.openai.com/)**, **[Google Gemini](https://ai.google.dev/)** (through its OpenAI-compatible endpoint) or [OpenRouter](https://openrouter.ai/) (many models, one key). All use the standard `openai` SDK |
+| **Voice** | OpenAI or Gemini speech models, or local and optional: [`faster-whisper`](https://pypi.org/project/faster-whisper/) (speech to text) and [`piper-tts`](https://pypi.org/project/piper-tts/) / [`pyttsx3`](https://pypi.org/project/pyttsx3/) (text to speech) |
 | **Web UI** | [Streamlit](https://streamlit.io/) |
 | **Testing** | `pytest`, with fakes for the embedder, LLM and vision model |
 
@@ -100,16 +101,16 @@ Question ─► embed ─► Chroma top-k ─► filter by score ─► LLM (sou
 
 ## 🔑 API Key Setup
 
-The app answers with **Google Gemini** (or OpenRouter). Create a Gemini key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then create a `.env` file in the project root (copy `.env.example`):
+The app answers with **OpenAI**, **Google Gemini** or OpenRouter. Create an OpenAI key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys), then create a `.env` file in the project root (copy `.env.example`):
 
 ```env
-GEMINI_API_KEY=your-gemini-api-key
+OPENAI_API_KEY=your-openai-api-key
 
 # Optional settings (these are the defaults)
-# GEMINI_MODEL=gemini-3.8-flash         # answers, rewriting, image judging, figure captions
-# GEMINI_FALLBACK_MODEL=                # optional: tried if the main model is busy
+# OPENAI_MODEL=gpt-4o-mini              # answers, rewriting, image judging, figure captions
+# OPENAI_FALLBACK_MODEL=                # optional: tried if the main model is busy
 # VISION_PROVIDER=auto                  # auto | none
-# VISION_MODEL=                         # defaults to GEMINI_MODEL; must accept images
+# VISION_MODEL=                         # defaults to the answer model; must accept images
 # TOP_K=5                               # passages sent to the model
 # MIN_SCORE=0.5                         # minimum similarity to count as relevant
 # DATA_DIR=./data
@@ -118,13 +119,16 @@ GEMINI_API_KEY=your-gemini-api-key
 # MAX_IMAGES=2                          # most figures sent with one question
 # HELPER_MODEL=                         # small model for follow-up rewriting and image judging
 # MEMORY_MESSAGES=6                     # earlier messages used to understand follow-ups
+# WEB_SEARCH=true                       # answer from Google when the PDFs don't have the answer
+# WEB_SEARCH_MODEL=                     # defaults to GEMINI_MODEL; must support Google Search grounding
 
 # Voice settings (VOICE_STT, WHISPER_MODEL, VOICE_TTS, PIPER_VOICE, ...) are listed in .env.example
 ```
 
-- **Which provider answers:** `LLM_PROVIDER=auto` (the default) uses Gemini when `GEMINI_API_KEY` is set, otherwise OpenRouter. Set `LLM_PROVIDER=openrouter` to keep using OpenRouter even when a Gemini key is present.
-- **Using OpenRouter instead:** set `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`, `OPENROUTER_FALLBACK_MODEL`) from [openrouter.ai/keys](https://openrouter.ai/keys). Model ids differ between providers (`gemini-3.8-flash` for Gemini, `google/gemini-2.5-flash` or `openai/gpt-4o-mini` for OpenRouter), and `VISION_MODEL` / `HELPER_MODEL` must match the provider that answers.
-- **Voice with the same key:** a Gemini key also switches voice to Gemini (see *Voice assistant* below).
+- **Which provider answers:** `LLM_PROVIDER=auto` (the default) uses OpenAI when `OPENAI_API_KEY` is set, otherwise Gemini when `GEMINI_API_KEY` is set, otherwise OpenRouter. Set `LLM_PROVIDER=gemini` or `openrouter` to pick one explicitly when several keys are present.
+- **Using Gemini instead:** set `GEMINI_API_KEY` (from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)) and optionally `GEMINI_MODEL` (default `gemini-3.8-flash`) and `GEMINI_FALLBACK_MODEL`. A Gemini key is also what the web fallback needs, even when OpenAI writes the answers.
+- **Using OpenRouter instead:** set `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`, `OPENROUTER_FALLBACK_MODEL`) from [openrouter.ai/keys](https://openrouter.ai/keys). Model ids differ between providers (`gpt-4o-mini` for OpenAI, `gemini-3.8-flash` for Gemini, `openai/gpt-4o-mini` for OpenRouter), and `VISION_MODEL` / `HELPER_MODEL` must match the provider that answers.
+- **Voice with the same key:** an OpenAI key also switches voice to OpenAI, and a Gemini key to Gemini (see *Voice assistant* below).
 - **No key?** The app starts in **search-only mode**.
 - **Charts and photos** need a vision-capable model. Set `VISION_PROVIDER=none` to skip captioning (tables and text still work).
 - `.env` is in `.gitignore`. **Never commit your key.**
@@ -165,13 +169,13 @@ pip install -r requirements-voice.txt
 python scripts/download_voice_models.py     # Whisper 'base' (~140 MB) and a Piper voice (~60 MB), once
 ```
 
-These are only needed for the **local** voice engines. With a Gemini key, voice uses Gemini and nothing here is required. Without a key and without these packages, the app works as before and the sidebar says that voice is off.
+These are only needed for the **local** voice engines. With an OpenAI or Gemini key, voice uses that service and nothing here is required. Without a key and without these packages, the app works as before and the sidebar says that voice is off.
 
 ### 3. Add your API key
 
 ```bash
 copy .env.example .env      # Windows   (macOS/Linux: cp .env.example .env)
-# then edit .env and set GEMINI_API_KEY (or OPENROUTER_API_KEY)
+# then edit .env and set OPENAI_API_KEY (or GEMINI_API_KEY / OPENROUTER_API_KEY)
 ```
 
 ### 4. Start the web app
@@ -214,24 +218,45 @@ python eval/evaluate.py                                   # hit@1, hit@k, MRR on
 
 Ask a question aloud and hear the answer:
 
-1. **Ask**: click the microphone in the chat bar, speak, and send. Your recording is turned into text by Gemini, or on your machine with faster-whisper. The text appears in the chat, marked as a spoken question, so you can see what was heard.
+1. **Ask**: click the microphone in the chat bar, speak, and send. Your recording is turned into text by OpenAI or Gemini, or on your machine with faster-whisper. The text appears in the chat, marked as a spoken question, so you can see what was heard.
 2. **Answer**: the question goes through the same pipeline as a typed one: follow-up rewriting, retrieval, citations and sources.
-3. **Listen**: the answer is read aloud (Gemini or Piper) without citation markers like `[1]` or Markdown symbols. Very long answers are shortened when spoken and end with "See the full answer on screen."
+3. **Listen**: the answer is read aloud (OpenAI, Gemini or Piper) without citation markers like `[1]` or Markdown symbols. Very long answers are shortened when spoken and end with "See the full answer on screen."
 
 Typed questions are not read aloud, but every answer has a **Listen** button. If speech output fails, the written answer is still shown.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `VOICE_STT` | `gemini` with a Gemini key, else `whisper` | `gemini`, `whisper` or `none` (hides the microphone) |
+| `VOICE_STT` | `openai` with an OpenAI key, else `gemini` with a Gemini key, else `whisper` | `openai`, `gemini`, `whisper` or `none` (hides the microphone) |
 | `WHISPER_MODEL` | `base` | `tiny`, `base`, `small`, ... Larger models understand more but are slower |
 | `VOICE_LANGUAGE` | empty | Force a language such as `en`; empty detects it |
-| `VOICE_TTS` | `gemini` with a Gemini key, else `piper` | `gemini`, `piper`, `pyttsx3` (the operating system's voice) or `none` |
+| `VOICE_TTS` | `openai` with an OpenAI key, else `gemini` with a Gemini key, else `piper` | `openai`, `gemini`, `piper`, `pyttsx3` (the operating system's voice) or `none` |
+| `OPENAI_STT_MODEL` / `OPENAI_TTS_MODEL` | `gpt-4o-mini-transcribe` / `gpt-4o-mini-tts` | OpenAI models for hearing and speaking (`whisper-1` is the speech-to-text fallback) |
+| `OPENAI_VOICE` | `alloy` | OpenAI voice name (`nova`, `shimmer`, `onyx`, ... ) |
 | `GEMINI_STT_MODEL` / `GEMINI_TTS_MODEL` | `gemini-3.8-flash` / `gemini-3.8-flash-tts` | Gemini models for hearing and speaking |
 | `GEMINI_VOICE` | `Kore` | Gemini voice name (`Puck`, `Charon`, ... ) |
 | `PIPER_VOICE` | `data/models/piper/en_US-lessac-medium.onnx` | Voice file. Other languages need a matching voice |
 | `VOICE_AUTOPLAY` | `true` | Start playing a spoken answer right away |
 
-You can mix the two: for example `VOICE_STT=whisper` to hear locally while Gemini speaks. If `VOICE_STT` or `VOICE_TTS` is `gemini` but there is no `GEMINI_API_KEY`, the local engines are used instead. Gemini voice sends the recording and the answer text to Google and needs internet; the local engines keep everything on your machine. Local speed on a laptop CPU: about 1 to 2 seconds to transcribe a short question, well under a second to speak the answer.
+You can mix them: for example `VOICE_STT=whisper` to hear locally while OpenAI speaks. If `VOICE_STT` or `VOICE_TTS` names a cloud service but its key is not set, the local engines are used instead. Cloud voice sends the recording and the answer text to OpenAI or Google and needs internet; the local engines keep everything on your machine. Local speed on a laptop CPU: about 1 to 2 seconds to transcribe a short question, well under a second to speak the answer.
+
+---
+
+## 🌐 Web fallback
+
+When the answer is not in your documents, the app looks it up on Google:
+
+1. **Documents first**: every question is searched in your PDFs as usual.
+2. **Fallback**: if no passage is relevant enough (`MIN_SCORE`), or the model says *"I couldn't find that in the documents."*, the same question (rewritten for follow-ups) is sent to Gemini with its **Google Search** tool.
+3. **Labelled answer**: the reply starts with *"Not found in your documents — here is what a Google search found:"*, and the Sources panel becomes **Web sources** with clickable links. Typed, spoken and CLI questions all behave the same.
+
+If the web search fails (no internet, quota exceeded), you get the usual "not found" answer with a short note, never an error.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WEB_SEARCH` | `true` | `false` keeps answers strictly to your documents |
+| `WEB_SEARCH_MODEL` | `GEMINI_MODEL` | Gemini model used for the grounded search |
+
+It needs `GEMINI_API_KEY`, even when OpenRouter writes the document answers. The question is sent to Google. Grounded requests count against your Gemini quota and are billed beyond the free tier. The links are Google redirect URLs (`vertexaisearch.cloud.google.com/...`) that open the original page.
 
 ---
 
@@ -249,9 +274,11 @@ You can mix the two: for example `VOICE_STT=whisper` to hear locally while Gemin
 │   ├── embeddings.py       # Local fastembed embedder
 │   ├── vector_store.py     # Chroma wrapper
 │   ├── generator.py        # Prompt building + LLM call + citation parsing
+│   ├── openai_client.py    # OpenAI client
 │   ├── gemini.py           # Gemini client (OpenAI-compatible endpoint)
 │   ├── openrouter.py       # OpenRouter client, retry and fallback
 │   ├── voice.py            # Speech to text (Whisper) and text to speech (Piper, pyttsx3)
+│   ├── web_search.py       # Web fallback: Google Search through Gemini grounding
 │   ├── pipeline.py         # DocQA: ingest PDFs and answer questions
 │   └── models.py           # Dataclasses: Page, Chunk, SearchResult, Answer
 ├── eval/                   # Retrieval-quality evaluation

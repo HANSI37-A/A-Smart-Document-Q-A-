@@ -1,8 +1,10 @@
 import pytest
 
-from rag.pipeline import NOT_FOUND, DocQA
+from rag.models import Turn
+from rag.pipeline import NOT_FOUND, WEB_PREFIX, DocQA
 from rag.vector_store import VectorStore
-from tests.conftest import FakeGenerator
+from rag.web_search import WebSearchError
+from tests.conftest import FakeGenerator, FakeWebSearcher
 
 
 @pytest.fixture
@@ -71,3 +73,73 @@ def test_deleting_a_document_removes_its_chunks_and_saved_figures(tmp_path, fake
     assert qa.store.count() == 0
     assert not (figs / report.doc_id).exists()
     assert (figs / "other-doc").exists()          # other documents are untouched
+
+
+# ---------------------------------------------------------------- web fallback
+
+def test_unrelated_question_is_answered_from_the_web(tmp_path, fake_embedder, sample_pdf):
+    web = FakeWebSearcher()
+    qa = DocQA(VectorStore(str(tmp_path)), fake_embedder, FakeGenerator(), min_score=0.5,
+               web_searcher=web)
+    qa.ingest_pdf(sample_pdf)
+    answer = qa.ask("zebra quantum volcano")
+    assert answer.web is True
+    assert answer.text == WEB_PREFIX + web.text
+    assert [r.chunk.url for r in answer.sources] == ["https://example.com/france"]
+    assert answer.cited == [1]
+    assert web.calls == [("zebra quantum volcano", [])]
+    assert qa.generator.calls == []            # the document model was not asked
+
+
+def test_model_refusal_falls_back_to_the_web(tmp_path, fake_embedder, sample_pdf):
+    web = FakeWebSearcher()
+    qa = DocQA(VectorStore(str(tmp_path)), fake_embedder, FakeGenerator(reply=NOT_FOUND),
+               min_score=0.2, web_searcher=web)
+    qa.ingest_pdf(sample_pdf)
+    answer = qa.ask("How many days of paid annual leave?")
+    assert len(qa.generator.calls) == 1        # the documents were tried first
+    assert len(web.calls) == 1
+    assert answer.web is True
+    assert all(r.chunk.kind == "web" for r in answer.sources)   # document passages replaced
+
+
+def test_answer_found_in_documents_does_not_search_the_web(tmp_path, fake_embedder, sample_pdf):
+    web = FakeWebSearcher()
+    qa = DocQA(VectorStore(str(tmp_path)), fake_embedder, FakeGenerator(), min_score=0.2,
+               web_searcher=web)
+    qa.ingest_pdf(sample_pdf)
+    answer = qa.ask("How many days of paid annual leave?")
+    assert web.calls == []
+    assert answer.web is False
+
+
+def test_failed_web_search_still_returns_not_found(tmp_path, fake_embedder, sample_pdf):
+    qa = DocQA(VectorStore(str(tmp_path)), fake_embedder, FakeGenerator(), min_score=0.5,
+               web_searcher=FakeWebSearcher(error=WebSearchError("Google Search failed (HTTP 503).")))
+    qa.ingest_pdf(sample_pdf)
+    answer = qa.ask("zebra quantum volcano")
+    assert answer.text.startswith(NOT_FOUND)
+    assert "HTTP 503" in answer.text
+    assert answer.web is False and answer.sources == []
+
+
+def test_unexpected_web_error_never_breaks_the_answer(tmp_path, fake_embedder, sample_pdf):
+    qa = DocQA(VectorStore(str(tmp_path)), fake_embedder, FakeGenerator(), min_score=0.5,
+               web_searcher=FakeWebSearcher(error=RuntimeError("boom")))
+    qa.ingest_pdf(sample_pdf)
+    assert qa.ask("zebra quantum volcano").text == NOT_FOUND
+
+
+def test_follow_up_web_search_uses_the_rewritten_question_and_history(tmp_path, fake_embedder,
+                                                                     sample_pdf):
+    class Rewriter:
+        def rewrite(self, history, question):
+            return "zebra quantum volcano population"
+
+    web = FakeWebSearcher()
+    qa = DocQA(VectorStore(str(tmp_path)), fake_embedder, FakeGenerator(), min_score=0.5,
+               rewriter=Rewriter(), web_searcher=web)
+    qa.ingest_pdf(sample_pdf)
+    history = [Turn("user", "Tell me about zebras"), Turn("assistant", "They are striped.")]
+    qa.ask("how many are there?", history=history)
+    assert web.calls == [("zebra quantum volcano population", history)]

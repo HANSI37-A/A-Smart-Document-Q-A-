@@ -24,7 +24,21 @@ def make_client(api_key: str, site_url: str | None = None,
                          max_retries=0, timeout=60)   # we do our own retries below
 
 
+QUOTA_CODES = {"insufficient_quota", "credit_balance_exhausted"}
+
+
+def _out_of_credit(e: Exception) -> bool:
+    """A 429 that means the account has no credit left. Waiting does not fix that."""
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        body = body.get("error", body)     # some providers nest the error object
+    return (isinstance(e, openai.RateLimitError) and isinstance(body, dict)
+            and (body.get("code") in QUOTA_CODES or body.get("type") in QUOTA_CODES))
+
+
 def _temporary(e: Exception) -> bool:
+    if _out_of_credit(e):
+        return False
     if isinstance(e, openai.APIStatusError):
         return e.status_code in RETRYABLE
     return isinstance(e, (openai.APIConnectionError, openai.APITimeoutError))
@@ -41,6 +55,11 @@ def call_with_retry(call, models: list[str], attempts: int = 3, delay: float = 2
             try:
                 return call(model)
             except openai.OpenAIError as e:
+                if _out_of_credit(e):      # every model and retry would fail the same way
+                    raise OpenRouterBusyError(
+                        "The AI account has no credit left. Add credit to your account "
+                        "(for OpenAI: platform.openai.com/settings/organization/billing) "
+                        "and try again.") from e
                 if not _temporary(e):
                     raise
                 last = e

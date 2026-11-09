@@ -343,6 +343,65 @@ def _error_message(response) -> str:
     return str(message)[:200]
 
 
+# ---------------------------------------------------------------- OpenAI (cloud)
+
+class OpenAITranscriber:
+    """Speech to text with OpenAI's transcription models (gpt-4o-mini-transcribe, whisper-1).
+
+    `client` is an OpenAIClient (rag/openai_client.py), so retry and fallback work as for answers.
+    """
+
+    def __init__(self, client, model: str = "gpt-4o-mini-transcribe",
+                 fallback_model: str | None = None, language: str | None = None):
+        self.client = client
+        self.models = [model] + ([fallback_model] if fallback_model else [])
+        self.language = language or None
+        self.label = f"OpenAI {model}"
+
+    def transcribe(self, audio: bytes) -> str:
+        if not audio:
+            return ""
+        extra = {"language": self.language} if self.language else {}
+        name = "question.mp3" if audio[:3] == b"ID3" else "question.wav"   # the chat bar records WAV
+        try:
+            response = call_with_retry(
+                lambda model: self.client.audio.transcriptions.create(
+                    model=model, file=(name, audio), **extra),
+                self.models,
+            )
+        except (OpenRouterBusyError, openai.OpenAIError) as e:
+            raise VoiceError(f"Could not transcribe the recording: {e}") from e
+        return (getattr(response, "text", None) or "").strip()
+
+
+class OpenAISpeaker:
+    """Text to speech with OpenAI's speech models (gpt-4o-mini-tts, tts-1)."""
+
+    def __init__(self, client, model: str = "gpt-4o-mini-tts", voice: str = "alloy"):
+        self.client = client
+        self.model = model
+        self.voice = voice
+        self.label = f"OpenAI {voice}"
+
+    def synthesize(self, text: str) -> bytes:
+        if not text.strip():
+            return b""
+        try:
+            response = call_with_retry(
+                lambda model: self.client.audio.speech.create(
+                    model=model, voice=self.voice, input=text[:4000], response_format="wav"),
+                [self.model],
+            )
+        except (OpenRouterBusyError, openai.OpenAIError) as e:
+            raise VoiceError(f"OpenAI could not speak the answer: {e}") from e
+        audio = getattr(response, "content", None)
+        if audio is None:
+            audio = response.read()
+        if not audio:
+            raise VoiceError("OpenAI returned no audio for this answer.")
+        return audio
+
+
 class _com_session:
     """Streamlit runs scripts in worker threads; SAPI5 needs COM initialised in each one."""
 

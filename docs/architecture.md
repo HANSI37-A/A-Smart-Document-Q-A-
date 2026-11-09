@@ -15,6 +15,7 @@ This document describes the code as implemented. File and symbol names refer to 
 7. [Known limitations and extension points](#7-known-limitations-and-extension-points)
 8. [Image-aware answers and conversation memory](#8-image-aware-answers-and-conversation-memory)
 9. [Voice assistant](#9-voice-assistant)
+10. [Web fallback (Google Search)](#10-web-fallback-google-search)
 
 ---
 
@@ -65,7 +66,7 @@ It measures how close two vectors point in the same direction. 1 means very simi
 | Embedder | `rag/embeddings.py` | `Embedder` protocol and local `FastEmbedder`. |
 | Vector store | `rag/vector_store.py` | Chroma wrapper: add, search, list, delete, close. |
 | Generator | `rag/generator.py` | Prompt building, model call, citation parsing. |
-| LLM client | `rag/openrouter.py`, `rag/gemini.py` | OpenAI-SDK clients for OpenRouter and for Gemini (its OpenAI-compatible endpoint), plus the shared retry and fallback. |
+| LLM client | `rag/openrouter.py`, `rag/gemini.py`, `rag/openai_client.py` | OpenAI-SDK clients for OpenRouter, Gemini (its OpenAI-compatible endpoint) and OpenAI itself, plus the shared retry and fallback. |
 | Data classes | `rag/models.py` | `Page`, `Chunk`, `SearchResult`, `Answer`. |
 
 ### 1.3 Component interaction
@@ -113,10 +114,14 @@ PDF file
 
 ```
 question ─► Embedder.embed_query ─► Chroma top-k (cosine) ─► drop score < min_score
-        ├─ nothing left ──────────────► "I couldn't find that in the documents." (no model call)
+        ├─ nothing left ──────────────► web fallback* (no document-model call)
         ├─ no generator (no API key) ─► search-only answer + passages
         └─ otherwise ─► build_prompt ─► OpenRouter chat completion ─► answer
-                                         └─► find_citations ─► cited source numbers
+                                         ├─► find_citations ─► cited source numbers
+                                         └─ reply is the "not found" sentence ─► web fallback*
+
+* web fallback: GeminiWebSearcher (Google Search grounding) ─► labelled web answer + URL sources;
+  without a web searcher, or if it fails: "I couldn't find that in the documents."
 ```
 
 ### 1.5 The UI layer
@@ -342,9 +347,10 @@ The threshold is the first line of defence against hallucination: if nothing cle
 | Condition | Result |
 |---|---|
 | Empty or whitespace question | `ValueError("Please type a question.")` |
-| No result above `min_score` | `Answer(text="I couldn't find that in the documents.", sources=[])`. **No model call is made.** |
+| No result above `min_score` | Web fallback (section 10), or `Answer(text="I couldn't find that in the documents.", sources=[])` without one. **The document model is not called.** |
 | Results exist but no generator (no API key) | `"Search-only mode: here are the most relevant passages."` plus the passages as sources |
 | Results and generator | `generator.generate(question, results)`; `cited` is computed from the reply |
+| Generator replies with the "not found" sentence (`is_not_found`) | Web fallback; the document passages are replaced by the web sources |
 
 ### 4.3 Prompt construction (`rag/generator.py`)
 
@@ -377,7 +383,7 @@ These prompt rules work together with the code-level guards:
 | Layer | Mechanism |
 |---|---|
 | Retrieval | `min_score` removes weak matches |
-| Routing | No retrieved evidence means no model call and a fixed "not found" answer |
+| Routing | No retrieved evidence means no document-model call; the answer is either a fixed "not found" or a web answer that is **always labelled** as coming from Google (`Answer.web`, the `WEB_PREFIX` line and "Web sources") |
 | Prompt | Closed-book instruction plus a fixed refusal sentence |
 | Output validation | `find_citations()` extracts `[n]` markers and keeps only numbers between 1 and the number of sources, so invented citation numbers are discarded |
 | Empty model reply | `OpenRouterGenerator` falls back to the "not found" sentence if the model returns no content |
@@ -398,7 +404,7 @@ Prompt rules reduce hallucination but cannot guarantee that it never happens. Th
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `LLM_PROVIDER` | `auto` | `auto`, `gemini` or `openrouter`. `auto` picks Gemini when `GEMINI_API_KEY` is set, otherwise OpenRouter. |
+| `LLM_PROVIDER` | `auto` | `auto`, `openai`, `gemini` or `openrouter`. `auto` picks OpenAI when `OPENAI_API_KEY` is set, then Gemini when `GEMINI_API_KEY` is set, otherwise OpenRouter. Per-provider settings: `OPENAI_MODEL` (default `gpt-4o-mini`), `OPENAI_FALLBACK_MODEL`, `OPENAI_REASONING`, `OPENAI_STT_MODEL`, `OPENAI_TTS_MODEL`, `OPENAI_VOICE`. |
 | `GEMINI_API_KEY` | none | Enables answers, vision and (by default) voice through Gemini. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Model used for answers when Gemini is the provider. |
 | `GEMINI_FALLBACK_MODEL` | none | Optional second Gemini model tried if the main one stays unavailable. |
@@ -479,6 +485,15 @@ Gemini is reached through its OpenAI-compatible endpoint (`https://generativelan
 
 It sends no OpenRouter attribution headers, keeps `max_retries=0` and `timeout=60`, and relies on `call_with_retry` exactly as before. `OpenRouterBusyError` keeps its name but its message is provider-neutral.
 
+### 5.6 OpenAI (`rag/openai_client.py`)
+
+OpenAI is the SDK's default endpoint, so `OpenAIClient` is a thin wrapper around `openai.OpenAI` that exposes the same `chat.completions.create` call as the other providers. The generator, rewriter, image judge and vision describer are unchanged. It makes two adjustments:
+
+- **`max_completion_tokens`.** Newer OpenAI models reject `max_tokens`, so the limit is renamed on every request (older models accept the new name too).
+- **Thinking headroom, reasoning models only.** For `gpt-5` and the o-series, `THINKING_HEADROOM` (1,024) tokens are added, and `reasoning_effort` is sent only when `OPENAI_REASONING` is set. Other models are left as they are.
+
+Voice uses the same client: `OpenAITranscriber` calls `audio.transcriptions` (`gpt-4o-mini-transcribe`, with `whisper-1` as the fallback model) and `OpenAISpeaker` calls `audio.speech` and asks for WAV. Both go through `call_with_retry` and raise `VoiceError`. The web fallback still needs a Gemini key (Google Search grounding), whichever provider writes the answers.
+
 ---
 
 ## 6. Testing and quality assurance
@@ -500,13 +515,14 @@ PDFs for multimodal tests are generated on the fly with `reportlab`: a text page
 
 ### 6.2 Test modules
 
-194 tests in total:
+212 tests in total:
 
 | Module | Tests | Focus |
 |---|---|---|
 | `tests/test_multimodal.py` | 32 | Table to Markdown conversion and cell cleaning; splitting long tables with repeated headers; table detection in a PDF; table chunk ids and metadata; figure detection (image and chart pages only); figure chunks via the describer; decorative, empty and failing captions skipped; known figures not re-described; the OpenRouter vision payload (`image_url` data URL); pipeline ingestion counts; table and chart questions retrieving the right page and kind; re-ingestion making no vision calls; SAM-style crops and fallback; logos, repeats and blank crops dropped before any vision call; chart boxes keep their axis labels; a header logo does not hide a chart; saved crops and `image_path`; no-describer mode; unchanged behaviour for plain-text PDFs; prompt labelling of `type="table"` and `type="figure"`. |
 | `tests/generator.py` | 16 | Prompt numbering; citation extraction ignoring invalid numbers; chat-completions payload (model, `max_tokens`, system and user messages); empty reply fallback; client base URL and attribution headers; retry on 503; fallback model; friendly error when everything is busy; no retry for a bad key; images sent as `image_url` parts on the vision model; history order; plain-text request when there are no images. |
-| `tests/pipeline.py` | 7 | Ingestion report; idempotent re-ingestion; relevant chunks reach the generator; unrelated question skips the model; search-only mode; empty question rejected; deleting a document removes its figure files. |
+| `tests/pipeline.py` | 13 | Ingestion report; idempotent re-ingestion; relevant chunks reach the generator; unrelated question skips the model; search-only mode; empty question rejected; deleting a document removes its figure files. Web fallback: unrelated question answered from the web, model refusal falls back to the web, answers found in documents never search the web, failed or crashing web search returns "not found", follow-ups search with the rewritten question and history. |
+| `tests/web_search.py` | 12 | Grounded request shape (endpoint, key header, `google_search` tool, history roles); web sources and `[n]` citations from grounding metadata; UTF-8 byte offsets; duplicate pages and the source cap; no grounding or no text is an error; retries on busy servers, no retry for bad requests, key never in errors; `is_not_found` variations. |
 | `tests/chunker.py` | 7 | Split sizes, overlap, page-bounded chunks, invalid parameters. |
 | `tests/pdf_loader.py` | 6 | Text cleaning, page numbering, empty-text error. |
 | `tests/vector_store.py` | 5 | Ranking, empty store, duplicate-free upserts, document listing and deletion. |
@@ -517,6 +533,7 @@ PDFs for multimodal tests are generated on the fly with `reportlab`: a text page
 | `tests/app.py` | 8 | Headless Streamlit run (`streamlit.testing.v1.AppTest`): sidebar, search-only warning, a question, and the cited page in the sources; chats are saved, listed in the sidebar, reopen in a new session; New chat starts empty. Voice (with fakes): off by default in tests, sidebar status and microphone prompt, a spoken question is answered and played, typed questions are not read aloud but the Listen button works, a speech failure keeps the written answer. |
 | `tests/voice.py` | 54 | `speech_text` (citations, Markdown, icons, tables, code, truncation); `question_from_input` (typed, spoken, both, silent); Whisper wrapper (segments, silence, errors, lazy loading); Piper and pyttsx3 wrappers (WAV output, empty text, errors, temp files removed); Gemini speech to text (audio payload, language hint, no-speech reply, errors, busy service); Gemini text to speech (request shape, WAV wrapping, retries, no retry for bad requests, key never in errors, empty or non-audio replies); voice settings; `build_voice` choosing Gemini or local engines, mixing them, and falling back without a key; a real Piper to Whisper round trip (`slow`). |
 | `tests/gemini.py` | 14 | `GeminiClient` (thinking headroom, optional reasoning effort, endpoint and headers, works with the existing rewriter); provider selection (`auto`, forced, both keys, missing key, unknown value); per-provider models; voice defaults following the key; `build_llm_client`. |
+| `tests/openai_provider.py` | 23 | `OpenAIClient` (`max_completion_tokens`, thinking headroom and reasoning effort for reasoning models only, endpoint and retries, works with the existing rewriter); provider selection (`auto` order, forced, missing key, unknown value); OpenAI speech to text and text to speech (request shape, language, errors, empty input); `build_voice` choosing OpenAI or falling back to local engines. |
 | `tests/retrieval_quality.py` | 2 | Retrieval quality on the sample handbook with the real embedding model. |
 
 Tests that load a real model (embeddings, SAM, Whisper and Piper) are marked `slow` (declared in `pytest.ini`).
@@ -567,6 +584,7 @@ Chunk size, overlap and `k` are command-line options, so settings can be compare
 |---|---|
 | Different embedding model | Implement `Embedder` or pass another `model_name` to `FastEmbedder`. |
 | Different LLM or provider | Implement `Generator`; pass it to `DocQA`. |
+| Different web search (Tavily, Serper, ...) | Implement `WebSearcher.search(question, history) -> WebAnswer`; pass it to `DocQA` as `web_searcher`. |
 | Different vision model | Set `VISION_MODEL`, or implement `VisionDescriber`. |
 | Another store | Replace `VectorStore`, keeping `add`, `search`, `documents`, `delete_document`, `existing_ids`. |
 | Tune retrieval | `TOP_K`, `MIN_SCORE`, `chunk_size`, `overlap`; measure with `eval/evaluate.py`. |
@@ -723,3 +741,48 @@ speech_text()  -->  Speaker.synthesize()  (Gemini or Piper)  -->  st.audio(autop
 - `requirements-voice.txt` pins `av<17`: `faster-whisper` 1.2 calls `av.open(metadata_errors=...)`, which newer PyAV releases removed.
 - Gemini voice sends the recording, and the answer text, to Google, and needs internet. It is subject to the account's rate limits; the local engines are the offline option.
 - Gemini model ids change over time (older ones are retired). If a request fails with "model not found", set `GEMINI_MODEL`, `GEMINI_STT_MODEL` or `GEMINI_TTS_MODEL` to a current id from Google's model list.
+
+---
+
+## 10. Web fallback (Google Search)
+
+When the documents do not hold the answer, `DocQA` can answer from a Google search instead. It is off when no web searcher is configured, and the behaviour is then exactly as in section 4.
+
+### 10.1 When it runs (`DocQA.ask` and `DocQA._web_answer`)
+
+1. **No evidence**: nothing clears `min_score`. The document model is not called.
+2. **Model refusal**: the generator's reply matches the fixed "not found" sentence. `is_not_found()` in `rag/generator.py` tolerates whitespace, bold, a curly apostrophe, case and a missing full stop.
+
+In both cases the searcher receives the **standalone** `search_query` (the rewritten follow-up) and the recent chat history.
+
+### 10.2 The searcher (`rag/web_search.py`)
+
+`GeminiWebSearcher` calls Gemini's native `models/{model}:generateContent` endpoint with `tools: [{"google_search": {}}]`. The OpenAI-compatible endpoint used for document answers does not return grounding sources. It follows the `GeminiSpeaker` pattern: an injectable `post`, an `x-goog-api-key` header, retries on `RETRYABLE` statuses, and errors that never contain the key.
+
+`parse_grounded_answer()` turns the response into a `WebAnswer`:
+
+- **Text**: the candidate's text parts (thought parts are skipped).
+- **Sources**: `groundingMetadata.groundingChunks[].web` becomes `SearchResult(Chunk(kind="web", url=uri, source=title, page=0, doc_id="web"), score=1.0)`. Each page is numbered once, capped at `max_sources` (5).
+- **Citations**: `[n]` markers are inserted after each `groundingSupports[].segment.endIndex`. Gemini counts these offsets in **UTF-8 bytes**, so insertion works on the encoded text, back to front. The existing `find_citations()` then works unchanged.
+
+A reply with no text or no web sources raises `WebSearchError`.
+
+### 10.3 Labelling and failure handling
+
+- A web answer has `Answer.web = True`, and its text starts with `WEB_PREFIX` ("*Not found in your documents — here is what a Google search found:*"). The label is part of the text, so it is saved in chat history, printed by the CLI and spoken by the voice assistant.
+- The UI shows an "Answer from Google Search — not from your documents" caption and renders the sources as **Web sources** links (no page or score). Source dicts carry a `url` field.
+- On `WebSearchError`, the "not found" answer is returned with a short italic note. Any other exception is logged and the "not found" answer is returned. The web never turns an answer into an error.
+
+### 10.4 Settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WEB_SEARCH` | `true` | Enable the fallback (needs `GEMINI_API_KEY`, whichever provider answers) |
+| `WEB_SEARCH_MODEL` | `GEMINI_MODEL` | Model used for the grounded search; it must support the `google_search` tool |
+
+### 10.5 Limits of this design
+
+- Web answers are only as good as Google's results and Gemini's summary. They are not checked against the documents.
+- The question is sent to Google. Grounded requests use the Gemini quota and are billed beyond the free tier.
+- Source links are Google redirect URLs, and titles are usually domain names.
+- A document answer that *starts* with the "not found" sentence (for example "I couldn't find that in the documents, but...") also triggers the fallback.

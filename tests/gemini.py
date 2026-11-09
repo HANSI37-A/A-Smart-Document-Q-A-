@@ -79,7 +79,8 @@ def llm_env(tmp_path, monkeypatch):
                  "GEMINI_FALLBACK_MODEL", "GEMINI_REASONING", "GEMINI_STT_MODEL",
                  "GEMINI_TTS_MODEL", "GEMINI_VOICE", "OPENROUTER_MODEL",
                  "OPENROUTER_FALLBACK_MODEL", "VOICE_STT", "VOICE_TTS", "VISION_PROVIDER",
-                 "VISION_MODEL", "HELPER_MODEL"):
+                 "VISION_MODEL", "HELPER_MODEL", "OPENAI_API_KEY", "OPENAI_MODEL",
+                 "OPENAI_FALLBACK_MODEL", "OPENAI_REASONING"):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 

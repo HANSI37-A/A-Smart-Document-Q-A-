@@ -37,21 +37,30 @@ class Settings:
     voice_tts: str = "piper"     # "piper", "pyttsx3" or "none" (text to speech)
     piper_voice: Path | None = None
     voice_autoplay: bool = True  # play spoken answers as soon as they are ready
-    llm_provider: str = "openrouter"   # "gemini" or "openrouter": who writes the answers
+    llm_provider: str = "gemini"   # "openrouter" or "openrouter": who writes the answers
     gemini_api_key: str | None = None
     gemini_reasoning: str | None = None   # e.g. "low"; None = leave the model's default
     gemini_stt_model: str = "gemini-3.8-flash"
     gemini_tts_model: str = "gemini-3.8-flash-tts"
     gemini_voice: str = "Kore"
     gemini_fallback_model: str | None = None
+    web_search: bool = True      # answer from Google when the documents don't (needs a Gemini key)
+    web_search_model: str = "gemini-3.8-flash"
+    openai_api_key: str | None = None
+    openai_reasoning: str | None = None   # e.g. "low" (gpt-5 / o-series only); None = default
+    openai_stt_model: str = "gpt-4o-mini-transcribe"
+    openai_stt_fallback_model: str | None = "whisper-1"
+    openai_tts_model: str = "gpt-4o-mini-tts"
+    openai_voice: str = "alloy"
 
     @property
     def api_key(self) -> str | None:
         """The key of the provider that answers questions (None = search-only mode)."""
-        return self.gemini_api_key if self.llm_provider == "gemini" else self.openrouter_api_key
+        return {"openai": self.openai_api_key,
+                "gemini": self.gemini_api_key}.get(self.llm_provider, self.openrouter_api_key)
 
 
-LLM_PROVIDERS = ("gemini", "openrouter")
+LLM_PROVIDERS = ("openai", "gemini", "openrouter")
 
 
 def _flag(name: str, default: bool) -> bool:
@@ -62,18 +71,25 @@ def _flag(name: str, default: bool) -> bool:
 def load_settings() -> Settings:
     load_dotenv(PROJECT_DIR / ".env")
     gemini_key = os.getenv("GEMINI_API_KEY") or None
+    openai_key = os.getenv("OPENAI_API_KEY") or None
     provider = os.getenv("LLM_PROVIDER", "auto").strip().lower()
-    if provider == "auto":     # a Gemini key wins; otherwise OpenRouter as before
-        provider = "gemini" if gemini_key else "openrouter"
+    if provider == "auto":     # an OpenAI key wins, then Gemini; otherwise OpenRouter as before
+        provider = "openai" if openai_key else "gemini" if gemini_key else "openrouter"
     if provider not in LLM_PROVIDERS:
-        raise ValueError(f"LLM_PROVIDER must be auto, gemini or openrouter (got {provider!r}).")
-    if provider == "gemini":
+        raise ValueError(
+            f"LLM_PROVIDER must be auto, openai, gemini or openrouter (got {provider!r}).")
+    if provider == "openai":
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        fallback = os.getenv("OPENAI_FALLBACK_MODEL") or None
+    elif provider == "gemini":
         model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
         fallback = os.getenv("GEMINI_FALLBACK_MODEL") or None
     else:
         model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
         fallback = os.getenv("OPENROUTER_FALLBACK_MODEL") or None
     data_dir = Path(os.getenv("DATA_DIR", PROJECT_DIR / "data"))
+    voice_default = "openai" if openai_key else "gemini" if gemini_key else "whisper"
+    tts_default = "openai" if openai_key else "gemini" if gemini_key else "piper"
     return Settings(
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or None,
         llm_provider=provider,
@@ -98,16 +114,26 @@ def load_settings() -> Settings:
         image_min_score=float(os.getenv("IMAGE_MIN_SCORE", "0.45")),
         max_images=int(os.getenv("MAX_IMAGES", "2")),
         memory_messages=int(os.getenv("MEMORY_MESSAGES", "6")),
-        # with a Gemini key, voice defaults to Gemini too; set VOICE_STT / VOICE_TTS to change it
-        voice_stt=os.getenv("VOICE_STT", "gemini" if gemini_key else "whisper").lower(),
+        # with a cloud key, voice defaults to the same company (OpenAI, else Gemini), otherwise
+        # it runs locally; set VOICE_STT / VOICE_TTS to change it
+        voice_stt=os.getenv("VOICE_STT", voice_default).lower(),
         whisper_model=os.getenv("WHISPER_MODEL", "base"),
         whisper_device=os.getenv("WHISPER_DEVICE", "cpu"),
         whisper_compute=os.getenv("WHISPER_COMPUTE", "int8"),
         voice_language=os.getenv("VOICE_LANGUAGE") or None,
-        voice_tts=os.getenv("VOICE_TTS", "gemini" if gemini_key else "piper").lower(),
+        voice_tts=os.getenv("VOICE_TTS", tts_default).lower(),
         piper_voice=Path(os.getenv("PIPER_VOICE")
                          or data_dir / "models" / "piper" / "en_US-lessac-medium.onnx"),
         voice_autoplay=_flag("VOICE_AUTOPLAY", True),
+        web_search=_flag("WEB_SEARCH", True),
+        web_search_model=(os.getenv("WEB_SEARCH_MODEL")
+                          or os.getenv("GEMINI_MODEL") or "gemini-3.8-flash"),
+        openai_api_key=openai_key,
+        openai_reasoning=os.getenv("OPENAI_REASONING") or None,
+        openai_stt_model=os.getenv("OPENAI_STT_MODEL") or "gpt-4o-mini-transcribe",
+        openai_stt_fallback_model=os.getenv("OPENAI_STT_FALLBACK_MODEL", "whisper-1") or None,
+        openai_tts_model=os.getenv("OPENAI_TTS_MODEL") or "gpt-4o-mini-tts",
+        openai_voice=os.getenv("OPENAI_VOICE") or "alloy",
     )
 
 
@@ -130,11 +156,14 @@ def build_segmenter(s: Settings):
 def build_llm_client(s: Settings):
     """The chat client of the provider that answers questions, or None without a key.
 
-    Both return an OpenAI-SDK style client, so the classes named OpenRouter* (generator,
-    rewriter, image judge, vision describer) work with either provider unchanged.
+    All of them return an OpenAI-SDK style client, so the classes named OpenRouter* (generator,
+    rewriter, image judge, vision describer) work with any provider unchanged.
     """
     if not s.api_key:
         return None
+    if s.llm_provider == "openai":
+        from rag.openai_client import make_openai_client
+        return make_openai_client(s.api_key, s.openai_reasoning)
     if s.llm_provider == "gemini":
         from rag.gemini import make_gemini_client
         return make_gemini_client(s.api_key, s.gemini_reasoning)
@@ -165,6 +194,10 @@ def build_app(settings: Settings | None = None):
             describer = OpenRouterVisionDescriber(client, s.vision_model,
                                                   fallback_model=s.fallback_model)
             segmenter = build_segmenter(s)   # only needed when figures are described
+    web_searcher = None
+    if s.web_search and s.gemini_api_key:   # Google Search always goes through Gemini
+        from rag.web_search import GeminiWebSearcher
+        web_searcher = GeminiWebSearcher(s.gemini_api_key, s.web_search_model)
     return DocQA(
         store=store,
         embedder=FastEmbedder(),
@@ -176,29 +209,39 @@ def build_app(settings: Settings | None = None):
         rewriter=rewriter,
         image_selector=ImageSelector(store, judge, s.image_min_score, s.max_images),
         figures_dir=s.data_dir / "figures",
+        web_searcher=web_searcher,
     )
 
 
 def build_voice(settings: Settings | None = None):
     """(transcriber, speaker) for the voice assistant; either is None when not available.
 
-    Each half is "gemini" (cloud, needs GEMINI_API_KEY) or local (Whisper / Piper / system
-    voice). Nothing is downloaded or loaded here except a local text-to-speech voice: the
-    Whisper model loads on its first use. A missing key, package or voice file switches to
-    the local engine, or that half off, with a warning (like build_segmenter() for SAM).
+    Each half is "openai" (cloud, needs OPENAI_API_KEY), "gemini" (cloud, needs
+    GEMINI_API_KEY) or local (Whisper / Piper / system voice). Nothing is downloaded or loaded
+    here except a local text-to-speech voice: the Whisper model loads on its first use. A
+    missing key, package or voice file switches to the local engine, or that half off, with a
+    warning (like build_segmenter() for SAM).
     """
-    from rag.voice import (GeminiSpeaker, GeminiTranscriber, PiperSpeaker, Pyttsx3Speaker,
-                           WhisperTranscriber)
+    from rag.voice import (GeminiSpeaker, GeminiTranscriber, OpenAISpeaker, OpenAITranscriber,
+                           PiperSpeaker, Pyttsx3Speaker, WhisperTranscriber)
 
     s = settings or load_settings()
     stt, tts = s.voice_stt, s.voice_tts
-    if "gemini" in (stt, tts) and not s.gemini_api_key:
-        log.warning("Voice is set to Gemini but GEMINI_API_KEY is not set; using local engines.")
-        stt = "whisper" if stt == "gemini" else stt
-        tts = "piper" if tts == "gemini" else tts
+    keys = {"openai": s.openai_api_key, "gemini": s.gemini_api_key}
+    for name, key in keys.items():
+        if name in (stt, tts) and not key:
+            log.warning("Voice is set to %s but %s_API_KEY is not set; using local engines.",
+                        name.capitalize(), name.upper())
+            stt = "whisper" if stt == name else stt
+            tts = "piper" if tts == name else tts
 
     transcriber = None
-    if stt == "gemini":
+    if stt == "openai":
+        from rag.openai_client import make_openai_client
+        transcriber = OpenAITranscriber(make_openai_client(s.openai_api_key), s.openai_stt_model,
+                                        fallback_model=s.openai_stt_fallback_model,
+                                        language=s.voice_language)
+    elif stt == "gemini":
         from rag.gemini import make_gemini_client
         transcriber = GeminiTranscriber(make_gemini_client(s.gemini_api_key), s.gemini_stt_model,
                                         fallback_model=s.gemini_fallback_model,
@@ -213,7 +256,11 @@ def build_voice(settings: Settings | None = None):
                         "(pip install -r requirements-voice.txt); voice input is off.")
 
     speaker = None
-    if tts == "gemini":
+    if tts == "openai":
+        from rag.openai_client import make_openai_client
+        speaker = OpenAISpeaker(make_openai_client(s.openai_api_key), s.openai_tts_model,
+                                s.openai_voice)
+    elif tts == "gemini":
         speaker = GeminiSpeaker(s.gemini_api_key, s.gemini_tts_model, s.gemini_voice)
     elif tts == "piper":
         try:

@@ -55,6 +55,25 @@ class FakeGenerator:
         return self.reply
 
 
+class FakeWebSearcher:
+    """Stands in for Google Search: returns a fixed answer (or raises) and records the calls."""
+
+    def __init__(self, text: str = "Paris is the capital of France [1].",
+                 urls: tuple[str, ...] = ("https://example.com/france",), error=None):
+        from rag.models import Chunk
+        self.text, self.error = text, error
+        self.sources = [SearchResult(Chunk(id=u, text=u, source=u, page=0, doc_id="web",
+                                           kind="web", url=u), 1.0) for u in urls]
+        self.calls: list[tuple[str, list]] = []   # (question, history)
+
+    def search(self, question, history=()):
+        from rag.web_search import WebAnswer
+        self.calls.append((question, list(history)))
+        if self.error:
+            raise self.error
+        return WebAnswer(self.text, self.sources)
+
+
 class FakeTranscriber:
     """Speech to text without a model: always 'hears' the same words."""
 

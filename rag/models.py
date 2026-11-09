@@ -17,8 +17,9 @@ class Chunk:
     source: str
     page: int
     doc_id: str
-    kind: str = "text"     # "text", "table" or "figure"
+    kind: str = "text"     # "text", "table", "figure" or "web"
     image_path: str = ""   # figures only: the saved crop ("" = no image)
+    url: str = ""          # web results only: the page that was found
 
 
 @dataclass
@@ -41,3 +42,4 @@ class Answer:
     cited: list[int] = field(default_factory=list)
     images: list[SearchResult] = field(default_factory=list)   # figures shown to the model
     search_query: str = ""   # what was actually searched (the rewritten follow-up)
+    web: bool = False        # True = answered from a Google search, not from the documents

@@ -216,7 +216,9 @@ def voice_env(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     for name in ("VOICE_STT", "VOICE_TTS", "WHISPER_MODEL", "WHISPER_DEVICE", "WHISPER_COMPUTE",
                  "VOICE_LANGUAGE", "PIPER_VOICE", "VOICE_AUTOPLAY", "GEMINI_API_KEY",
-                 "GEMINI_STT_MODEL", "GEMINI_TTS_MODEL", "GEMINI_VOICE", "LLM_PROVIDER"):
+                 "GEMINI_STT_MODEL", "GEMINI_TTS_MODEL", "GEMINI_VOICE", "LLM_PROVIDER",
+                 "OPENAI_API_KEY", "OPENAI_STT_MODEL", "OPENAI_TTS_MODEL", "OPENAI_VOICE",
+                 "OPENAI_STT_FALLBACK_MODEL"):
         monkeypatch.delenv(name, raising=False)
     return tmp_path
 

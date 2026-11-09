@@ -10,13 +10,14 @@ from rag.models import SearchResult, Turn
 from rag.openrouter import call_with_retry
 from rag.vision import image_to_data_url
 
+NOT_FOUND = "I couldn't find that in the documents."
 
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT = f"""
 You are a helpful document question-answering assistant.
 
 Answer the user's question concisely, using only the provided document sources.
 If the sources do not contain the answer, reply exactly:
-I couldn't find that in the documents.
+{NOT_FOUND}
 
 Sources may be plain text, Markdown tables (type="table") or written descriptions
 of charts and images (type="figure"); use all of them.
@@ -62,6 +63,13 @@ def build_prompt(question: str, results: list[SearchResult],
         f"{attached}"
         f"Question: {question}"
     )
+
+
+def is_not_found(text: str) -> bool:
+    """True when a reply is the "not in the documents" sentence (allowing small variations)."""
+    def norm(t: str) -> str:
+        return re.sub(r"\s+", " ", t.replace("’", "'")).strip(" *_.!").casefold()
+    return norm(text).startswith(norm(NOT_FOUND))
 
 
 def find_citations(answer: str, n_sources: int) -> list[int]:
@@ -136,4 +144,4 @@ class OpenRouterGenerator:
             [m for m in (main, self.fallback_model) if m],
         )
         # content is None when the reply was blocked or cut off before any answer was written
-        return response.choices[0].message.content or "I couldn't find that in the documents."
+        return response.choices[0].message.content or NOT_FOUND
