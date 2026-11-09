@@ -110,8 +110,8 @@ with st.sidebar:
 
     st.divider()
     if app.generator is None:
-        st.warning("No GEMINI_API_KEY or OPENROUTER_API_KEY set: search-only mode "
-                   "(shows passages, no answers).")
+        st.warning("No OPENAI_API_KEY, GEMINI_API_KEY or OPENROUTER_API_KEY set: search-only "
+                   "mode (shows passages, no answers).")
     else:
         st.caption(f"Model: {settings.model} ({settings.llm_provider})")
         st.caption("Charts and images: " + ("read by a vision model" if app.describer
@@ -139,9 +139,13 @@ def show_images(images):
 def show_sources(sources, cited):
     if not sources:
         return
-    with st.expander(f"Sources ({len(sources)})"):
+    web = all(s.get("kind") == "web" for s in sources)
+    with st.expander(f"{'Web sources' if web else 'Sources'} ({len(sources)})"):
         for n, s in enumerate(sources, start=1):
             star = " · :material/star: cited" if n in cited else ""
+            if s.get("kind") == "web":   # a page found by Google: a link, no page or score
+                st.markdown(f"**[{n}] [{s['source']}]({s.get('url', '')})** · web{star}")
+                continue
             kind = f" · {s['kind']}" if s.get("kind", "text") != "text" else ""
             st.markdown(f"**[{n}] {s['source']}, page {s['page']}**{kind} · "
                         f"score {s['score']:.2f}{star}")
@@ -156,6 +160,8 @@ def show_message(msg, key=None):
     query = msg.get("search_query", "")
     if query and msg.get("question") and query.strip().lower() != msg["question"].strip().lower():
         st.caption(f":material/search: Searched for: {query}")
+    if msg.get("web"):
+        st.caption(":material/public: Answer from Google Search — not from your documents")
     show_images(msg.get("images", []))
     show_sources(msg.get("sources", []), msg.get("cited", []))
     if key and speaker and msg.get("role") == "assistant" and not msg.get("error"):
@@ -205,9 +211,11 @@ def handle_question(question: str, *, spoken: bool = False):
                     "question": question,
                     "search_query": answer.search_query,
                     "sources": [{"source": r.chunk.source, "page": r.chunk.page,
-                                 "score": r.score, "text": r.chunk.text, "kind": r.chunk.kind}
+                                 "score": r.score, "text": r.chunk.text, "kind": r.chunk.kind,
+                                 "url": r.chunk.url}
                                 for r in answer.sources],
                     "cited": answer.cited,
+                    "web": answer.web,
                     "images": [{"path": r.chunk.image_path, "source": r.chunk.source,
                                 "page": r.chunk.page} for r in answer.images],
                 }

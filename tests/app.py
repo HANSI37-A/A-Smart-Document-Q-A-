@@ -17,6 +17,7 @@ def app_env(tmp_path, monkeypatch, sample_pdf):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))   # use a throwaway index
     monkeypatch.setenv("OPENROUTER_API_KEY", "")     # force search-only mode
     monkeypatch.setenv("GEMINI_API_KEY", "")         # (a real key in .env must not leak in)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("VOICE_STT", "none")          # no real speech models in these tests
     monkeypatch.setenv("VOICE_TTS", "none")
     from rag.config import build_app

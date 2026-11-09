@@ -16,7 +16,10 @@ def print_answer(answer) -> None:
     print(answer.text, "\n")
     for n, r in enumerate(answer.sources, start=1):
         mark = "*" if n in answer.cited else " "   # * = cited by the model
-        print(f"{mark}[{n}] {r.chunk.source} p.{r.chunk.page} (score {r.score:.2f})")
+        if r.chunk.kind == "web":
+            print(f"{mark}[{n}] {r.chunk.source} <{r.chunk.url}>")
+        else:
+            print(f"{mark}[{n}] {r.chunk.source} p.{r.chunk.page} (score {r.score:.2f})")
     for r in answer.images:
         print(f"  image: {r.chunk.image_path}")
 
@@ -49,7 +52,11 @@ def chat(app, chat_id: str | None = None) -> None:
         print_answer(answer)
         print()
         chats.add_message(chat_id, "assistant", answer.text, cited=answer.cited,
-                          search_query=answer.search_query,
+                          search_query=answer.search_query, web=answer.web,
+                          sources=[{"source": r.chunk.source, "page": r.chunk.page,
+                                    "score": r.score, "text": r.chunk.text,
+                                    "kind": r.chunk.kind, "url": r.chunk.url}
+                                   for r in answer.sources],
                           images=[{"path": r.chunk.image_path, "source": r.chunk.source,
                                    "page": r.chunk.page} for r in answer.images])
 

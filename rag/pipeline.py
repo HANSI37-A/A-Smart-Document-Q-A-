@@ -1,6 +1,7 @@
 """Connects everything: ingest PDFs and answer questions."""
 
 import hashlib
+import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +11,7 @@ import pdfplumber
 
 from rag.chunker import chunk_pages
 from rag.embeddings import Embedder
-from rag.generator import find_citations
+from rag.generator import NOT_FOUND, find_citations, is_not_found
 from rag.image_selector import ImageSelector
 from rag.memory import QuestionRewriter
 from rag.models import Answer, SearchResult, Turn
@@ -19,13 +20,21 @@ from rag.pdf_loader import NoTextError, load_pdf
 from rag.segmenter import RegionSegmenter
 from rag.vector_store import VectorStore
 from rag.vision import VisionDescriber
+from rag.web_search import WebAnswer, WebSearchError
 
-NOT_FOUND = "I couldn't find that in the documents."
+log = logging.getLogger(__name__)
+
+# shown above every answer that came from the web (also spoken, and kept in chat history)
+WEB_PREFIX = "*Not found in your documents — here is what a Google search found:*\n\n"
 
 
 class Generator(Protocol):
     def generate(self, question: str, results: list[SearchResult],
                  history: list[Turn] = (), images: list[SearchResult] = ()) -> str: ...
+
+
+class WebSearcher(Protocol):
+    def search(self, question: str, history: list[Turn] = ()) -> WebAnswer: ...
 
 
 @dataclass
@@ -50,7 +59,8 @@ class DocQA:
                  segmenter: RegionSegmenter | None = None,
                  rewriter: QuestionRewriter | None = None,
                  image_selector: ImageSelector | None = None,
-                 figures_dir: str | Path | None = None):
+                 figures_dir: str | Path | None = None,
+                 web_searcher: WebSearcher | None = None):
         self.store = store
         self.embedder = embedder
         self.generator = generator   # None = search-only mode
@@ -63,6 +73,7 @@ class DocQA:
         self.rewriter = rewriter     # None = follow-ups are searched as typed
         self.image_selector = image_selector   # None = never attach images
         self.figures_dir = Path(figures_dir) if figures_dir else None   # None = don't keep crops
+        self.web_searcher = web_searcher   # None = answer only from the documents
 
     # ---------------- documents ----------------
 
@@ -130,8 +141,9 @@ class DocQA:
         search_query = self.standalone_question(question, history)
         query_vec = self.embedder.embed_query(search_query)
         results = self.retrieve(search_query, query_vec)
-        if not results:
-            return Answer(text=NOT_FOUND, sources=[], search_query=search_query)  # no API call
+        if not results:   # nothing relevant in the documents: no model call
+            not_found = Answer(text=NOT_FOUND, sources=[], search_query=search_query)
+            return self._web_answer(search_query, history, not_found)
 
         images = []
         if self.image_selector is not None:
@@ -145,5 +157,24 @@ class DocQA:
             return Answer(text="Search-only mode: here are the most relevant passages.",
                           sources=sources, images=images, search_query=search_query)
         text = self.generator.generate(question, sources, history=history, images=images)
-        return Answer(text=text, sources=sources, cited=find_citations(text, len(sources)),
-                      images=images, search_query=search_query)
+        answer = Answer(text=text, sources=sources, cited=find_citations(text, len(sources)),
+                        images=images, search_query=search_query)
+        if is_not_found(text):   # the passages were related but did not hold the answer
+            return self._web_answer(search_query, history, answer)
+        return answer
+
+    def _web_answer(self, search_query: str, history: list[Turn], fallback: Answer) -> Answer:
+        """Answer from a Google search; `fallback` (the "not found" answer) if that fails."""
+        if self.web_searcher is None:
+            return fallback
+        try:
+            found = self.web_searcher.search(search_query, history=history)
+        except WebSearchError as e:
+            fallback.text += f"\n\n_Web search was not available: {e}_"
+            return fallback
+        except Exception:   # the web is a bonus: it must never break the answer
+            log.exception("Web search failed unexpectedly")
+            return fallback
+        return Answer(text=WEB_PREFIX + found.text, sources=found.sources,
+                      cited=find_citations(found.text, len(found.sources)),
+                      search_query=search_query, web=True)
